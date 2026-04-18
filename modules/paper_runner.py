@@ -174,8 +174,54 @@ def _ingest_signals():
 # EXECUTE PENDING (simulasi fill entry)
 # ══════════════════════════════════════════════════════════════════════════════
 
+PENDING_EXPIRE_HOURS = 24  # Auto-expire PENDING trade jika entry tidak terisi
+
+
+def _expire_pending_if_old(trade: dict) -> bool:
+    """
+    Cek apakah PENDING trade sudah melewati batas waktu 24 jam.
+    Jika ya, cancel dan kirim notifikasi. Returns True jika di-expire.
+    """
+    try:
+        created_at = datetime.fromisoformat(trade.get("created_at", ""))
+    except (ValueError, TypeError):
+        return False
+
+    age_hours = (datetime.now() - created_at).total_seconds() / 3600
+    if age_hours < PENDING_EXPIRE_HOURS:
+        return False
+
+    sym   = trade["symbol"]
+    side  = trade["side"]
+    entry = trade["entry_price"]
+    tg_id = trade.get("telegram_msg_id")
+
+    update_active_trade(trade["id"], {"status": "CANCELLED"})
+    logger.info(
+        f"⏰ [PAPER] {sym} PENDING expire — entry {entry} tidak terisi "
+        f"dalam {PENDING_EXPIRE_HOURS} jam"
+    )
+
+    from modules.paper_trader import SEP, _side_label, _fp
+    from modules.notifier import send_reply
+    msg = (
+        f"{SEP}\n"
+        f"⏰ <b>[PAPER] Order Expired</b>\n"
+        f"{SEP}\n\n"
+        f"📌 <b>{sym}</b>  {_side_label(side)}\n"
+        f"💰 Entry <code>{_fp(entry)}</code> tidak pernah terisi\n"
+        f"⌛ Expired setelah <b>{PENDING_EXPIRE_HOURS} jam</b>\n\n"
+        f"<i>🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+    )
+    send_reply(msg, reply_to_message_id=tg_id)
+    return True
+
+
 def _execute_pending():
-    """Cek pending trades apakah harga sudah menyentuh entry."""
+    """
+    Cek pending trades apakah harga sudah menyentuh entry.
+    Auto-expire jika sudah lebih dari 24 jam tanpa fill.
+    """
     orders = get_active_trades_by_status(["PENDING"])
     if not orders:
         return
@@ -183,6 +229,11 @@ def _execute_pending():
     client = _get_client()
     for trade in orders:
         sym = trade["symbol"]
+
+        # ✅ Auto-expire setelah 24 jam
+        if _expire_pending_if_old(trade):
+            continue
+
         try:
             ticker = client.fetch_ticker(sym)
             if ticker is None:

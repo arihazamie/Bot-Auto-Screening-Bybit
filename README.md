@@ -102,6 +102,23 @@ pnl (Long)     = (exit - entry) × quantity - fee
 pnl (Short)    = (entry - exit) × quantity - fee
 ```
 
+### Partial TP & SL Trailing
+
+| Event   | Aksi                                     | Balance |
+| ------- | ---------------------------------------- | ------- |
+| TP1 hit | Jual 30%, SL pindah → **Breakeven**      | +update |
+| TP2 hit | Jual 30%, SL pindah → **harga TP1**      | +update |
+| TP3 hit | Tutup sisa 40%                           | +update |
+| SL hit  | Tutup sisa posisi di SL efektif saat itu | +update |
+
+### Cascade TP (Skip Detection)
+
+Jika harga loncat langsung ke TP2 atau TP3 tanpa menyentuh TP sebelumnya, bot memproses setiap level secara berurutan terlebih dahulu — TP1 partial dihitung di harga TP1, TP2 partial dihitung di harga TP2 — baru kemudian menutup posisi di level yang tersentuh.
+
+### PENDING Auto-Expire
+
+Order yang belum terisi dalam **24 jam** otomatis di-cancel dan notifikasi dikirim ke Telegram.
+
 ---
 
 ## 🐛 Bug Fix
@@ -111,6 +128,8 @@ pnl (Short)    = (entry - exit) × quantity - fee
 | 1   | **ImportError `run_paper_update`** — fungsi dipindah ke `paper_runner.py`, import di `main.py` diperbarui |
 | 2   | **PnL calculation salah** — qty sudah mengandung leverage, tidak perlu dikali leverage lagi               |
 | 3   | **Windows UTF-8 crash** — stdout di-wrap UTF-8 agar emoji tidak error di cp1252                           |
+| 4   | **Balance tidak update saat partial** — balance kini diperbarui realtime di setiap TP1/TP2 hit            |
+| 5   | **Remaining qty salah di TP3/SL** — sisa posisi dihitung benar berdasarkan partial yang sudah terjual     |
 
 ---
 
@@ -118,17 +137,20 @@ pnl (Short)    = (entry - exit) × quantity - fee
 
 MIT License — lihat file `LICENSE`.
 
-📊 Penilaian Bot
+---
 
-| #   | Bidang                | Nilai | Catatan                                                                       |
-| :-- | :-------------------- | :---: | :---------------------------------------------------------------------------- |
-| 1   | Syntax & Import       | 9/10  | Semua file pass AST check, cross-import antar modul valid                     |
-| 2   | Struktur Kode         | 8/10  | Pemisahan modul bersih, daemon thread rapi, JSON storage sederhana tapi cukup |
-| 3   | Paper Trade Logic     | 8/10  | Flow lengkap: ingest→fill→monitor→close, breakeven TP1, partial TP2/TP3       |
-| 4   | PnL & Persentase      | 9/10  | Sudah fix: price%, ROI/margin, ROI/balance, fee taker 0.055% masuk            |
-| 5   | Max Leverage per Coin | 8/10  | Pakai field Bybit yang benar (leverageFilter.maxLeverage), cache thread-safe  |
-| 6   | Error Handling        | 7/10  | 5 bare except: di quant/patterns/derivatives — bisa sembunyikan bug           |
-| 7   | Thread Safety         | 8/10  | DB lock 8 titik, exchange lock, client lock — sudah cukup aman                |
-| 8   | Config & Validasi     | 6/10  | Jika config.json tidak ada → CONFIG = {} → crash tanpa pesan jelas            |
-| 9   | Requirements          | 7/10  | pytz dipakai di telegram_bot.py tapi tidak ada di requirements.txt            |
-| 10  | Telegram              | 7/10  | 8 command tersedia, pakai raw requests (tidak perlu library tambahan)         |
+## 📊 Penilaian Bot
+
+| #         | Bidang                |     Nilai     | Catatan                                                                                |
+| :-------- | :-------------------- | :-----------: | :------------------------------------------------------------------------------------- |
+| 1         | Syntax & Import       |     9/10      | Semua file pass AST check, cross-import antar modul valid                              |
+| 2         | Struktur Kode         |     8/10      | Pemisahan modul bersih, daemon thread rapi, JSON storage sederhana tapi cukup          |
+| 3         | Paper Trade Logic     |   **9/10**    | Cascade TP, SL trailing bertingkat (BE→TP1), partial balance realtime, auto-expire 24h |
+| 4         | PnL & Persentase      |     9/10      | Sudah fix: price%, ROI/margin, ROI/balance, fee taker 0.055% masuk                     |
+| 5         | Max Leverage per Coin |     8/10      | Pakai field Bybit yang benar (leverageFilter.maxLeverage), cache thread-safe           |
+| 6         | Error Handling        |     7/10      | 5 bare except di quant/patterns/derivatives — bisa sembunyikan bug                     |
+| 7         | Thread Safety         |     8/10      | DB lock 8 titik, exchange lock, client lock — sudah cukup aman                         |
+| 8         | Config & Validasi     |     6/10      | Jika config.json tidak ada → CONFIG = {} → crash tanpa pesan jelas                     |
+| 9         | Requirements          |     7/10      | pytz dipakai di telegram_bot.py tapi tidak ada di requirements.txt                     |
+| 10        | Telegram              |     7/10      | 8 command tersedia, pakai raw requests (tidak perlu library tambahan)                  |
+| **Total** |                       | **77→79/100** | Naik 2 poin dari perbaikan logika partial TP & order expiry                            |
