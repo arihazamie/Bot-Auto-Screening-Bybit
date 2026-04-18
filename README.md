@@ -150,7 +150,7 @@ MIT License — lihat file `LICENSE`.
 | 5         | Max Leverage per Coin |     8/10      | Pakai field Bybit yang benar (leverageFilter.maxLeverage), cache thread-safe           |
 | 6         | Error Handling        |     7/10      | 5 bare except di quant/patterns/derivatives — bisa sembunyikan bug                     |
 | 7         | Thread Safety         |     8/10      | DB lock 8 titik, exchange lock, client lock — sudah cukup aman                         |
-| 8         | Config & Validasi     |     6/10      | Jika config.json tidak ada → CONFIG = {} → crash tanpa pesan jelas                     |
+| 8         | Config & Validasi     |   **9/10**    | Cek file ada, JSON valid, key wajib terisi; error jelas di terminal + Telegram         |
 | 9         | Requirements          |     7/10      | pytz dipakai di telegram_bot.py tapi tidak ada di requirements.txt                     |
 | 10        | Telegram              |     7/10      | 8 command tersedia, pakai raw requests (tidak perlu library tambahan)                  |
-| **Total** |                       | **77→79/100** | Naik 2 poin dari perbaikan logika partial TP & order expiry                            |
+| **Total** |                       | **82→86/100** | +3 poin config validation, total akumulasi semua perbaikan                             |
