@@ -28,7 +28,10 @@ def _tg(method, token, _retry=3, **kwargs):
             r = requests.post(url, timeout=30, **kwargs)
             data = r.json()
             if not data.get('ok'):
-                print(f"❌ [Telegram/{method}] Error {data.get('error_code','?')}: {data.get('description','?')}")
+                desc = data.get('description', '')
+                # ✅ FIX: Suppress benign "not modified" error — content unchanged, not a real error
+                if 'not modified' not in desc.lower():
+                    print(f"❌ [Telegram/{method}] Error {data.get('error_code','?')}: {desc}")
             return data
         except requests.exceptions.Timeout:
             if attempt < _retry:
@@ -43,12 +46,17 @@ def _tg(method, token, _retry=3, **kwargs):
 
 
 def send_alert(data, auto_trade: bool = False):
+    """
+    Send signal alert to Telegram.
+    Returns message_id (int) on success, None on failure.
+    (Previously returned True/False — now returns int so callers can use it for replies.)
+    """
     token  = CONFIG['api'].get('telegram_bot_token')
     raw_id = CONFIG['api'].get('telegram_chat_id')
 
     if not token or not raw_id:
         print("❌ [send_alert] telegram_bot_token atau telegram_chat_id belum diisi di config.json!")
-        return False
+        return None
 
     chat_id = normalize_chat_id(raw_id)
     symbol  = data['Symbol']
@@ -96,7 +104,8 @@ def send_alert(data, auto_trade: bool = False):
                    json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'})
 
         if resp and resp.get('ok'):
-            msg = resp.get('result', {})
+            msg       = resp.get('result', {})
+            tg_msg_id = msg.get('message_id')
             insert_trade({
                 "symbol":        symbol,
                 "side":          data['Side'],
@@ -122,17 +131,18 @@ def send_alert(data, auto_trade: bool = False):
                 "quant_reasons": data.get('Quant_Reasons', ''),
                 "deriv_reasons": data.get('Deriv_Reasons', ''),
                 "smc_reasons":   smc_str,
-                "message_id":    str(msg.get('message_id', '')),
+                "message_id":    str(tg_msg_id),
                 "channel_id":    str(chat_id),
             })
-            return True
+            # ✅ Return int message_id so callers can pass it to save_signal_to_db for replies
+            return tg_msg_id
         else:
             print(f"❌ [send_alert] Gagal kirim ke {chat_id}. Resp: {resp}")
-            return False
+            return None
 
     except Exception as e:
         print(f"❌ Alert Error: {e}")
-        return False
+        return None
 
 
 def update_status_dashboard():

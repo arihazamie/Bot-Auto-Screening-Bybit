@@ -33,7 +33,7 @@ from modules.database import (
     save_daily_report,
 )
 from modules.paper_trader import paper_execute, paper_monitor
-from modules.notifier import send, trade_closed_alert
+from modules.notifier import send, send_reply, trade_closed_alert
 
 logger = logging.getLogger("PaperRunner")
 
@@ -144,6 +144,9 @@ def _ingest_signals():
         tp2   = float(sig["tp2"])
         tp3   = float(sig["tp3"])
 
+        # ✅ Ambil telegram_msg_id dari sinyal agar bisa reply ke pesan asli
+        tg_msg_id = sig.get("telegram_msg_id")
+
         # Leverage: per-coin max dari Bybit, atau fixed dari config
         final_lev = _get_leverage_for(sym)
 
@@ -158,23 +161,40 @@ def _ingest_signals():
             continue
 
         insert_active_trade({
-            "signal_id":   sig["id"],
-            "symbol":      sym,
-            "side":        side,
-            "entry_price": entry,
-            "sl_price":    sl,
+            "signal_id":       sig["id"],
+            "symbol":          sym,
+            "side":            side,
+            "entry_price":     entry,
+            "sl_price":        sl,
             "tp1": tp1, "tp2": tp2, "tp3": tp3,
-            "quantity":    qty,
-            "leverage":    final_lev,
-            "mode":        MODE,
+            "quantity":        qty,
+            "leverage":        final_lev,
+            "mode":            MODE,
+            "telegram_msg_id": tg_msg_id,   # ✅ simpan untuk reply selanjutnya
         })
         mark_signal_ingested(sig["id"])
         open_count += 1
+
         lev_tag = f"MAX={final_lev}x" if USE_MAX_LEVERAGE else f"Fixed={final_lev}x"
-        logger.info(
+        margin  = equity * RISK_PERCENT   # uang yang terkunci sebagai jaminan
+        log_msg = (
             f"✅ [{MODE}] Trade created: {sym} {side} | "
-            f"Qty={qty:.4f} | ${position_value:.2f} | Lev={lev_tag}"
+            f"Qty={qty:.4f} | Margin=${margin:.2f} | PosVal=${position_value:.2f} | Lev={lev_tag}"
         )
+        logger.info(log_msg)
+
+        # ✅ Kirim notifikasi Telegram sebagai reply ke sinyal asli
+        notify_msg = (
+            f"✅ <b>[PAPER] Trade Created</b>\n"
+            f"📌 {sym} <b>{side}</b> | ⚡ <code>{lev_tag}</code>\n"
+            f"{'─' * 24}\n"
+            f"💵 Margin used  : <code>${margin:.2f}</code>  ({RISK_PERCENT*100:.1f}%)\n"
+            f"📊 Pos. Value   : <code>${position_value:.2f}</code>  (margin × {final_lev}x)\n"
+            f"📦 Qty          : <code>{qty:.4f}</code>\n"
+            f"{'─' * 24}\n"
+            f"⏳ Menunggu entry @ <code>{entry}</code>"
+        )
+        send_reply(notify_msg, reply_to_message_id=tg_msg_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -230,9 +250,9 @@ def _daily_report():
         logger.info("[PAPER] Daily report: tidak ada trade tertutup dalam 24 jam")
         return
 
-    pnls   = [float(t.get("pnl", 0)) for t in trades]
-    total  = len(pnls)
-    wins   = sum(1 for p in pnls if p > 0)
+    pnls    = [float(t.get("pnl", 0)) for t in trades]
+    total   = len(pnls)
+    wins    = sum(1 for p in pnls if p > 0)
     pnl_sum = sum(pnls)
     balance = get_paper_balance()
 
@@ -252,10 +272,10 @@ def _daily_report():
     save_daily_report(date_str, report)
 
     msg = (
-        f"📊 Daily Report (PAPER)\n"
+        f"📊 <b>Daily Report (PAPER)</b>\n"
         f"Trades: {total} | W/L: {wins}/{total - wins}\n"
         f"PnL: ${pnl_sum:+.4f} | WR: {report['win_rate']}%\n"
-        f"💼 Paper Balance: ${balance:.2f}"
+        f"💼 Paper Balance: <b>${balance:.2f}</b>"
     )
     send(msg)
     logger.info(msg)
@@ -302,7 +322,7 @@ def _run_loop():
                 last_ingest = now
 
             # Daily report jam 07:00
-            current_day = datetime.now().day
+            current_day  = datetime.now().day
             current_hour = datetime.now().hour
             if current_hour == 7 and current_day != last_report_day:
                 _daily_report()

@@ -93,6 +93,7 @@ def insert_active_trade(data: dict) -> int:
         data.setdefault('order_id', None)
         data.setdefault('is_sl_moved', False)
         data.setdefault('pnl', 0)
+        data.setdefault('telegram_msg_id', None)   # ✅ store original signal Telegram msg_id
         data['created_at'] = str(datetime.now())
         data['updated_at'] = str(datetime.now())
         records.append(data)
@@ -217,21 +218,25 @@ def set_state(key: str, value: str):
 
 # ─── Signal Queue (untuk auto_trades.py) ───────────────────
 
-def save_signal_to_db(res: dict) -> int:
+def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
     """
     Konversi hasil analyze_ticker ke format signal queue
-    yang bisa dibaca auto_trades.py via get_waiting_signals().
+    yang bisa dibaca paper_runner.py via get_waiting_signals().
+
+    ✅ telegram_msg_id: Telegram message_id dari signal alert yang dikirim,
+       disimpan agar paper_runner bisa reply ke pesan aslinya.
     """
     return insert_signal({
-        "symbol":      res['Symbol'],
-        "side":        res['Side'],
-        "timeframe":   res['Timeframe'],
-        "entry_price": res['Entry'],
-        "sl_price":    res['SL'],
-        "tp1":         res['TP1'],
-        "tp2":         res['TP2'],
-        "tp3":         res['TP3'],
-        "rr":          res['RR'],
-        "pattern":     res['Pattern'],
-        "btc_bias":    res['BTC_Bias'],
+        "symbol":          res['Symbol'],
+        "side":            res['Side'],
+        "timeframe":       res['Timeframe'],
+        "entry_price":     res['Entry'],
+        "sl_price":        res['SL'],
+        "tp1":             res['TP1'],
+        "tp2":             res['TP2'],
+        "tp3":             res['TP3'],
+        "rr":              res['RR'],
+        "pattern":         res['Pattern'],
+        "btc_bias":        res['BTC_Bias'],
+        "telegram_msg_id": telegram_msg_id,   # ✅ link ke pesan Telegram asli
     })

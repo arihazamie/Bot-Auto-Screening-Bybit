@@ -30,6 +30,7 @@ from modules.patterns import find_pattern
 from modules.telegram_bot import send_alert, run_fast_update, send_scan_completion
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 from modules.paper_runner import start_paper_runner
+from modules.telegram_commands import start_command_listener, is_paused
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging setup — semua module pakai logger ini
@@ -345,6 +346,11 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
 # scan
 # ─────────────────────────────────────────────────────────────────────────────
 def scan():
+    # ✅ Cek pause flag dari Telegram /pause command
+    if is_paused():
+        logger.info("⏸ Scan dilewati — bot sedang di-pause via Telegram (/resume untuk lanjutkan)")
+        return
+
     start_time = time.time()
     mode_label = "AUTO TRADE 🤖" if AUTO_TRADE_ENABLED else "SIGNAL ONLY 📡"
     logger.info(f"🔭 Scan dimulai | Mode: {mode_label}")
@@ -384,11 +390,13 @@ def scan():
             for f in as_completed(futures):
                 res = f.result()
                 if res:
-                    success = send_alert(res, auto_trade=AUTO_TRADE_ENABLED)
-                    if success:
+                    # ✅ send_alert now returns Telegram message_id (int) on success, None on failure
+                    tg_msg_id = send_alert(res, auto_trade=AUTO_TRADE_ENABLED)
+                    if tg_msg_id:
                         signal_count += 1
                         # Simpan ke DB di KEDUA mode agar paper_runner bisa ingest
-                        save_signal_to_db(res)
+                        # ✅ Teruskan telegram_msg_id agar paper_runner bisa reply ke pesan asli
+                        save_signal_to_db(res, telegram_msg_id=tg_msg_id)
                         mode_tag = "🤖 real" if AUTO_TRADE_ENABLED else "📋 paper"
                         logger.info(f"   {mode_tag} signal queued: {res['Symbol']} {res['Side']} [{res['Timeframe']}]")
 
@@ -458,6 +466,12 @@ if __name__ == "__main__":
         print("   (auto_trade=false → paper trader berjalan di background thread)")
         print()
         start_paper_runner()
+
+    # ── Start Telegram Command Listener ───────────────────────────
+    print("🎧 Telegram Command Listener — AUTO START")
+    print("   Perintah: /start /status /trades /balance /report /pause /resume")
+    print()
+    start_command_listener()
 
     # ── Cek koneksi Bybit sebelum mulai ─────────────────────────
     ok = client.health_check(auto_trade=AUTO_TRADE_ENABLED)
