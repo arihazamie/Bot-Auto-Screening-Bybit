@@ -55,21 +55,46 @@ def normalize_chat_id(chat_id) -> str:
     return chat_id_str
 
 
-def _tg(method, token, _retry=3, **kwargs):
+def _tg(method, token, _retry=5, **kwargs):
+    """
+    Kirim request ke Telegram API dengan retry otomatis.
+
+    Penanganan error:
+      - HTTP 429 (rate limit) → baca retry_after dari response, tunggu, lalu retry
+      - Timeout               → tunggu 2×attempt detik, lalu retry
+      - Error lain            → log dan return None
+    """
     url = TG_BASE.format(token=token, method=method)
     for attempt in range(1, _retry + 1):
         try:
-            r    = requests.post(url, timeout=30, **kwargs)
+            r = requests.post(url, timeout=30, **kwargs)
+
+            # ── Rate limit: Telegram minta kita tunggu ───────────────────
+            if r.status_code == 429:
+                retry_after = 1
+                try:
+                    retry_after = r.json().get("parameters", {}).get("retry_after", 1)
+                except Exception:
+                    pass
+                wait = float(retry_after) + 0.5
+                print(f"⏳ [Telegram/{method}] Rate limit (429) — tunggu {wait:.1f}s "
+                      f"(attempt {attempt}/{_retry})")
+                time.sleep(wait)
+                continue
+
             data = r.json()
-            if not data.get('ok'):
-                desc = data.get('description', '')
-                if 'not modified' not in desc.lower():
+            if not data.get("ok"):
+                desc = data.get("description", "")
+                if "not modified" not in desc.lower():
                     print(f"❌ [Telegram/{method}] Error {data.get('error_code','?')}: {desc}")
             return data
+
         except requests.exceptions.Timeout:
             if attempt < _retry:
-                print(f"⏳ [Telegram/{method}] Timeout, retry {attempt}/{_retry}...")
-                time.sleep(2 * attempt)
+                wait = 2 * attempt
+                print(f"⏳ [Telegram/{method}] Timeout, retry {attempt}/{_retry} "
+                      f"(tunggu {wait}s)...")
+                time.sleep(wait)
             else:
                 print(f"❌ [Telegram/{method}] Timeout setelah {_retry}x retry")
                 return None
