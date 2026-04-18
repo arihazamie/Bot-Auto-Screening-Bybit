@@ -27,10 +27,11 @@ from modules.quant import calculate_metrics, check_fakeout
 from modules.derivatives import analyze_derivatives
 from modules.smc import analyze_smc
 from modules.patterns import find_pattern
-from modules.telegram_bot import send_alert, run_fast_update, send_scan_completion
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 from modules.paper_runner import start_paper_runner
 from modules.telegram_commands import start_command_listener, is_paused
+from modules.telegram_bot import send_alert, update_status_dashboard, send_scan_completion
+from modules.paper_trader import run_paper_update
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging setup — semua module pakai logger ini
@@ -492,7 +493,7 @@ if __name__ == "__main__":
 
     # ── Schedule ─────────────────────────────────────────────────
     schedule.every(CONFIG["system"]["check_interval_hours"]).hours.do(scan)
-    schedule.every(1).minutes.do(run_fast_update)
+    schedule.every(1).minutes.do(run_paper_update)
     schedule.every().day.at("07:00").do(refresh_daily_watchlist)
 
     print("\n🚀 Bot Started.")
