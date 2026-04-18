@@ -1,0 +1,75 @@
+{
+    "auto_trade": false,
+
+    "api": {
+        "bybit_key": "YOUR_BYBIT_API_KEY",
+        "bybit_secret": "YOUR_BYBIT_API_SECRET",
+        "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+        "telegram_chat_id": "YOUR_TELEGRAM_CHAT_ID"
+    },
+
+    "database": {
+        "host": "localhost",
+        "database": "bybit_bot",
+        "user": "postgres",
+        "password": "YOUR_DB_PASSWORD",
+        "port": "5432"
+    },
+
+    "system": {
+        "timezone": "Asia/Jakarta",
+        "max_threads": 20,
+        "check_interval_hours": 1,
+        "entry_timeframe": "15m",
+        "trend_timeframe": "1h",
+        "min_candles_analysis": 150
+    },
+
+    "risk": {
+        "target_leverage": 25,
+        "risk_percent": 0.01,
+        "max_positions": 40,
+        "tp_split": [0.30, 0.30, 0.40],
+        "paper_balance": 1000.0
+    },
+
+    "setup": {
+        "fib_entry_start": 0.5,
+        "fib_entry_end": 0.618,
+        "fib_sl": 0.27,
+        "fib_tp_1": 1.0,
+        "fib_tp_2": 1.618,
+        "fib_tp_3": 2.618
+    },
+
+    "strategy": {
+        "min_tech_score": 5,
+        "min_quant_score": 3,
+        "risk_reward_min": 3.0
+    },
+
+    "indicators": {
+        "min_rvol": 2.0
+    },
+
+    "patterns": {
+        "tolerance": 0.015,
+        "double_top": true,
+        "double_bottom": true,
+        "bull_flag": true,
+        "bear_flag": true,
+        "ascending_triangle": true,
+        "descending_triangle": true,
+        "bullish_rectangle": true
+    },
+
+    "pattern_signals": {
+        "double_bottom": "Long",
+        "double_top": "Short",
+        "bull_flag": "Long",
+        "bear_flag": "Short",
+        "ascending_triangle": "Long",
+        "descending_triangle": "Short",
+        "bullish_rectangle": "Long"
+    }
+}
