@@ -3,3 +3,4 @@ config.json
 bot_env/*
 *__pycache__/*\
 .venv
+venv

@@ -9,17 +9,19 @@ Menggunakan **Multi-Timeframe Analysis** — sinyal entry di **15m**, dikonfirma
 
 Bot menggunakan dua timeframe secara bersamaan:
 
-| Timeframe | Peran | Keterangan |
-|-----------|-------|------------|
-| **1h** (Trend TF) | Konfirmasi tren | EMA 13/21 menentukan arah pasar yang dominan |
-| **15m** (Entry TF) | Sinyal entry | Pattern teknikal, SMC, Quant, dan Deriv dianalisis di sini |
+| Timeframe          | Peran           | Keterangan                                                 |
+| ------------------ | --------------- | ---------------------------------------------------------- |
+| **1h** (Trend TF)  | Konfirmasi tren | EMA 13/21 menentukan arah pasar yang dominan               |
+| **15m** (Entry TF) | Sinyal entry    | Pattern teknikal, SMC, Quant, dan Deriv dianalisis di sini |
 
 ### Aturan MTF:
+
 - **Long hanya** diambil jika tren 1h **Bullish** (atau Sideways) **dan** pattern 15m adalah Long.
 - **Short hanya** diambil jika tren 1h **Bearish** (atau Sideways) **dan** pattern 15m adalah Short.
 - Jika tren 1h berlawanan dengan sinyal 15m → sinyal **diabaikan otomatis**.
 
 ### Alur Analisis per Symbol:
+
 ```
 Symbol → Cek Duplikat
        → Konfirmasi Tren 1h (EMA 13/21)
@@ -58,7 +60,7 @@ Bot-Auto-Screening-Bybit/
 └── modules/
     ├── __init__.py         ← File kosong (wajib ada!)
     ├── config_loader.py    ← Load config.json
-    ├── database.py         ← JSON file storage
+    ├── database.py         ← Penyimpanan data lokal (JSON file)
     ├── technicals.py       ← EMA, StochRSI, MACD, divergence
     ├── smc.py              ← Smart Money Concepts (OB, Structure)
     ├── quant.py            ← Quant metrics (Z-Score, Zeta, OBI)
@@ -153,17 +155,17 @@ deactivate
 
 ## ⚙️ Konfigurasi Penting
 
-| Key                         | Default   | Keterangan                               |
-| --------------------------- | --------- | ---------------------------------------- |
-| `auto_trade`                | `false`   | Toggle real/paper                        |
-| `system.entry_timeframe`    | `"15m"`   | Timeframe untuk sinyal entry             |
-| `system.trend_timeframe`    | `"1h"`    | Timeframe untuk konfirmasi tren          |
-| `system.min_candles_analysis` | `150`   | Minimum candle untuk analisis            |
-| `risk.risk_percent`         | `0.01`    | Risiko per trade (1%)                    |
-| `risk.target_leverage`      | `25`      | Leverage target                          |
-| `risk.max_positions`        | `40`      | Maks posisi bersamaan                    |
-| `risk.paper_balance`        | `1000.0`  | Modal awal paper trade                   |
-| `strategy.risk_reward_min`  | `3.0`     | Minimum R:R untuk membuka posisi         |
+| Key                           | Default  | Keterangan                       |
+| ----------------------------- | -------- | -------------------------------- |
+| `auto_trade`                  | `false`  | Toggle real/paper                |
+| `system.entry_timeframe`      | `"15m"`  | Timeframe untuk sinyal entry     |
+| `system.trend_timeframe`      | `"1h"`   | Timeframe untuk konfirmasi tren  |
+| `system.min_candles_analysis` | `150`    | Minimum candle untuk analisis    |
+| `risk.risk_percent`           | `0.01`   | Risiko per trade (1%)            |
+| `risk.target_leverage`        | `25`     | Leverage target                  |
+| `risk.max_positions`          | `40`     | Maks posisi bersamaan            |
+| `risk.paper_balance`          | `1000.0` | Modal awal paper trade           |
+| `strategy.risk_reward_min`    | `3.0`    | Minimum R:R untuk membuka posisi |
 
 ### Contoh `config.json` (bagian system):
 
@@ -210,6 +212,13 @@ sudo systemctl enable bybit_bot
 sudo systemctl start bybit_bot
 sudo systemctl status bybit_bot
 ```
+
+---
+
+## 👤 Credit
+
+Bot ini dikembangkan berdasarkan repo original milik [@Kurumichan987](https://x.com/Kurumichan987).  
+Terima kasih atas fondasi yang sudah dibuat — go follow & support beliau di X (Twitter)!
 
 ---
 

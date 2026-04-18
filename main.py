@@ -20,7 +20,7 @@ from modules.telegram_bot import send_alert, run_fast_update, send_scan_completi
 # ─────────────────────────────────────────────
 # 🔧 MODE CHECK
 # ─────────────────────────────────────────────
-AUTO_TRADE_ENABLED = CONFIG['system'].get('auto_trade', False)
+AUTO_TRADE_ENABLED = CONFIG.get('auto_trade', False)
 
 if AUTO_TRADE_ENABLED:
     print("🤖 Mode: AUTO TRADE — Sinyal akan dikirim & order otomatis dieksekusi di Bybit.")
