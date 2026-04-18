@@ -16,6 +16,7 @@ from modules.derivatives import analyze_derivatives
 from modules.smc import analyze_smc
 from modules.patterns import find_pattern
 from modules.telegram_bot import send_alert, run_fast_update, send_scan_completion
+from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 
 # ─────────────────────────────────────────────
 # 🔧 MODE CHECK
@@ -91,7 +92,7 @@ def calculate_rr(entry, sl, tp3):
     return round(abs(tp3 - entry) / risk, 2) if risk > 0 else 0.0
 
 
-def analyze_ticker(symbol, btc_bias, active_signals):
+def analyze_ticker(symbol, btc_bias, active_signals, counters):
     """
     Multi-Timeframe analysis per symbol:
       Step 1 — Duplicate check (keyed to ENTRY_TF)
@@ -102,8 +103,9 @@ def analyze_ticker(symbol, btc_bias, active_signals):
       Step 6 — Setup calculation and R:R filter
     """
 
-    # 1. DUPLICATE CHECK (per symbol + entry timeframe)
+    # 1. DUPLICATE CHECK
     if (symbol, ENTRY_TF) in active_signals:
+        counters['duplicate'] += 1
         return None
 
     try:
@@ -111,54 +113,58 @@ def analyze_ticker(symbol, btc_bias, active_signals):
         if "ST" in ticker_info.get('info', {}).get('symbol', ''):
             return None
 
-        # ── 2. TREND CONFIRMATION (1h) ──────────────────────────────────
         symbol_trend = get_symbol_trend(symbol)
 
-        # ── 3. ENTRY SIGNAL (15m) ────────────────────────────────────────
         min_candles = CONFIG['system'].get('min_candles_analysis', 150)
         bars = exchange.fetch_ohlcv(symbol, ENTRY_TF, limit=min_candles + 50)
         if not bars or len(bars) < min_candles:
+            counters['no_candles'] += 1
             return None
 
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
-        # Technicals & Pattern
         df = get_technicals(df)
         pattern = find_pattern(df)
         if not pattern:
+            counters['no_pattern'] += 1
             return None
 
         side = CONFIG['pattern_signals'].get(pattern)
 
-        # ── 4. MTF ALIGNMENT CHECK ───────────────────────────────────────
-        # 15m Long signal must have a Bullish (or at least Sideways) 1h trend.
-        # 15m Short signal must have a Bearish (or at least Sideways) 1h trend.
+        # MTF check
         if symbol_trend == "Bearish" and side == "Long":
-            return None  # 1h trend conflicts with 15m long setup
+            counters['mtf_conflict'] += 1
+            return None
         if symbol_trend == "Bullish" and side == "Short":
-            return None  # 1h trend conflicts with 15m short setup
+            counters['mtf_conflict'] += 1
+            return None
 
-        # ── 5. GLOBAL BTC BIAS FILTER ────────────────────────────────────
+        # BTC bias filter
         if "Bearish" in btc_bias and side == "Long":
+            counters['btc_filter'] += 1
             return None
         if "Bullish" in btc_bias and side == "Short":
+            counters['btc_filter'] += 1
             return None
 
-        # ── 6. SMC Analysis ──────────────────────────────────────────────
+        # SMC
         valid_smc, smc_score, smc_reasons = analyze_smc(df, side)
-        if smc_score < CONFIG['strategy'].get('min_smc_score', 0):
+        if not valid_smc or smc_score < CONFIG['strategy'].get('min_smc_score', 0):
+            counters['smc_fail'] += 1
             return None
 
-        # ── 7. Quant & Deriv Metrics ─────────────────────────────────────
+        # Quant & Deriv
         df, basis, z_score, zeta_score, obi, quant_score, quant_reasons = calculate_metrics(df, ticker_info)
         valid_deriv, deriv_score, deriv_reasons = analyze_derivatives(df, ticker_info, side)
         if not valid_deriv:
+            counters['deriv_fail'] += 1
             return None
         if deriv_score < CONFIG['strategy'].get('min_deriv_score', 0):
+            counters['deriv_fail'] += 1
             return None
 
-        # ── 8. Scores ────────────────────────────────────────────────────
+        # Score
         div_score, div_msg = detect_divergence(df)
         tech_score = 3 + div_score
         tech_reasons = [f"Pattern: {pattern}", div_msg] + smc_reasons
@@ -166,9 +172,11 @@ def analyze_ticker(symbol, btc_bias, active_signals):
 
         valid_fo, fo_msg = check_fakeout(df, CONFIG['indicators']['min_rvol'])
         if not valid_fo:
+            counters['low_rvol'] += 1
             return None
 
         if tech_score < CONFIG['strategy']['min_tech_score']:
+            counters['low_tech_score'] += 1
             return None
 
         # ── 9. Setup Calculation ─────────────────────────────────────────
@@ -188,6 +196,7 @@ def analyze_ticker(symbol, btc_bias, active_signals):
 
         rr = calculate_rr(entry, sl, tp3)
         if rr < CONFIG['strategy'].get('risk_reward_min', 2.0):
+            counters['low_rr'] += 1
             return None
 
         df['funding'] = float(ticker_info.get('info', {}).get('fundingRate', 0))
@@ -233,58 +242,104 @@ def scan():
     signal_count = 0
 
     try:
-        mkts = exchange.load_markets()
+        # ── Ambil pair dari watchlist, fallback ke semua pair jika belum ada ──
+        syms = get_watchlist()
 
-        STABLECOINS = [
-            'USDC', 'USDT', 'DAI', 'FDUSD', 'USDD', 'USDE',
-            'TUSD', 'BUSD', 'PYUSD', 'USDS', 'EUR', 'USD'
-        ]
+        if syms:
+            info = get_watchlist_info()
+            print(f"📋 Watchlist: {len(syms)} pairs (updated: {info.get('updated_at', '?')[:16]})")
+        else:
+            print("⚠️  Watchlist belum ada, fetch semua pair dari Bybit sebagai fallback...")
+            mkts = exchange.load_markets()
+            STABLECOINS = {
+                'USDC', 'USDT', 'DAI', 'FDUSD', 'USDD', 'USDE',
+                'TUSD', 'BUSD', 'PYUSD', 'USDS', 'EUR', 'USD'
+            }
+            syms = [
+                s for s in mkts
+                if mkts[s].get('swap')
+                and mkts[s]['quote'] == 'USDT'
+                and mkts[s].get('active')
+                and mkts[s]['base'] not in STABLECOINS
+            ]
 
-        syms = [
-            s for s in mkts
-            if mkts[s].get('swap')
-            and mkts[s]['quote'] == 'USDT'
-            and mkts[s].get('active')
-            and mkts[s]['base'] not in STABLECOINS
-        ]
         random.shuffle(syms)
-        print(f"🔍 Scanning {len(syms)} valid pairs (Stables removed)...")
+        print(f"🔍 Scanning {len(syms)} pairs...")
+
+        # ── Debug counters ──
+        from collections import defaultdict
+        counters = defaultdict(int)
 
         # ── Single-pass: analyze each symbol with MTF (15m entry / 1h trend) ──
         with ThreadPoolExecutor(max_workers=CONFIG['system']['max_threads']) as ex:
-            futures = [ex.submit(analyze_ticker, s, btc_bias, active_signals) for s in syms]
+            futures = [ex.submit(analyze_ticker, s, btc_bias, active_signals, counters) for s in syms]
             for f in as_completed(futures):
                 res = f.result()
                 if res:
-                    # ─── Send signal to Telegram ───
                     success = send_alert(res, auto_trade=AUTO_TRADE_ENABLED)
-
                     if success:
                         signal_count += 1
-
-                        # ─── Save to DB only if Auto Trade ON ───
                         if AUTO_TRADE_ENABLED:
                             save_signal_to_db(res)
                         else:
-                            print(f"   📡 Signal Only: {res['Symbol']} {res['Side']} [{res['Timeframe']}] — tidak disimpan ke antrian trade.")
+                            print(f"   📡 Signal Only: {res['Symbol']} {res['Side']} [{res['Timeframe']}]")
+
+        # ── Print filter breakdown ──
+        total_filtered = sum(counters.values())
+        if total_filtered > 0:
+            print(f"\n📊 Filter Breakdown ({total_filtered} pairs filtered):")
+            labels = {
+                'no_pattern':    'No pattern detected',
+                'mtf_conflict':  'MTF conflict (1h vs 15m)',
+                'btc_filter':    'BTC bias conflict',
+                'smc_fail':      'SMC score fail',
+                'deriv_fail':    'Deriv score fail',
+                'low_rvol':      f"Low RVOL (< {CONFIG['indicators']['min_rvol']}x)",
+                'low_tech_score':f"Low tech score (< {CONFIG['strategy']['min_tech_score']})",
+                'low_rr':        f"Low R:R (< {CONFIG['strategy'].get('risk_reward_min', 2.0)})",
+                'no_candles':    'Insufficient candles',
+                'duplicate':     'Duplicate signal',
+            }
+            for key, label in labels.items():
+                if counters[key] > 0:
+                    bar = '█' * min(counters[key], 30)
+                    print(f"   {label:<35} {counters[key]:>4}  {bar}")
 
     except Exception as e:
         print(f"Scan Error: {e}")
 
     finally:
         duration = time.time() - start_time
-        print(f"✅ Scan Finished in {duration:.2f}s. Signals: {signal_count} | Mode: {mode_label}")
+        print(f"\n✅ Scan Finished in {duration:.2f}s. Signals: {signal_count} | Mode: {mode_label}")
         send_scan_completion(signal_count, duration, btc_bias, auto_trade=AUTO_TRADE_ENABLED)
+
+
+def refresh_daily_watchlist():
+    """Refresh watchlist setiap hari jam 7 pagi."""
+    print(f"\n[{pd.Timestamp.now()}] 🔄 Daily watchlist refresh starting...")
+    symbols = refresh_watchlist(exchange, top_n=CONFIG['system'].get('watchlist_top_n', 100))
+    if symbols:
+        print(f"✅ Watchlist refreshed: {len(symbols)} pairs siap untuk scan berikutnya.")
+    else:
+        print("⚠️  Watchlist refresh gagal, scan berikutnya akan pakai cache lama atau fallback.")
 
 
 if __name__ == "__main__":
     init_db()
+
+    # ── Fetch watchlist saat startup jika belum ada ──
+    if not get_watchlist():
+        print("📋 Watchlist belum ada — fetch sekarang...")
+        refresh_watchlist(exchange, top_n=CONFIG['system'].get('watchlist_top_n', 100))
+
     scan()
 
     schedule.every(CONFIG['system']['check_interval_hours']).hours.do(scan)
     schedule.every(1).minutes.do(run_fast_update)
+    schedule.every().day.at("07:00").do(refresh_daily_watchlist)
 
     print("🚀 Bot Started.")
+    print(f"🕖 Watchlist akan direfresh otomatis setiap hari jam 07:00.")
     while True:
         schedule.run_pending()
         time.sleep(1)

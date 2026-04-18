@@ -31,5 +31,6 @@ def find_pattern(df):
     if enabled.get('double_bottom') and check_alignment(valleys[-2:]): return 'double_bottom'
     if enabled.get('double_top') and check_alignment(peaks[-2:]): return 'double_top'
     if enabled.get('bull_flag') and -0.002 < s_high < -0.0002 and -0.002 < s_low < -0.0002: return 'bull_flag'
+    if enabled.get('bear_flag') and  0.0002 < s_high <  0.002  and  0.0002 < s_low <  0.002:  return 'bear_flag'
     if enabled.get('bullish_rectangle') and abs(s_high) < 0.0005 and abs(s_low) < 0.0005: return 'bullish_rectangle'
     return None

@@ -14,8 +14,9 @@ def _tg(method, token, **kwargs):
     url = TG_BASE.format(token=token, method=method)
     try:
         r = requests.post(url, **kwargs)
-        r.raise_for_status()
-        return r.json()
+        data = r.json()
+        # Return response apa pun (ok atau tidak) — caller yang handle
+        return data
     except Exception as e:
         print(f"Telegram API Error [{method}]: {e}")
         return None
@@ -74,7 +75,7 @@ def generate_chart(df, symbol, pattern, timeframe):
         return None
 
 
-def send_alert(data):
+def send_alert(data, auto_trade: bool = False):
     token   = CONFIG['api'].get('telegram_bot_token')
     chat_id = CONFIG['api'].get('telegram_chat_id')
     if not token or not chat_id:
@@ -218,24 +219,36 @@ def update_status_dashboard():
         msg_id = get_state('dashboard_msg_id')
 
         if msg_id:
-            _tg('editMessageText', token,
-                json={'chat_id': chat_id, 'message_id': int(msg_id),
-                      'text': content, 'parse_mode': 'Markdown'})
+            resp = _tg('editMessageText', token,
+                       json={'chat_id': chat_id, 'message_id': int(msg_id),
+                             'text': content, 'parse_mode': 'Markdown'})
+            # Jika edit gagal (pesan dihapus / expired / konten sama) → reset & kirim baru
+            if resp is None or not resp.get('ok'):
+                err = (resp or {}).get('description', '')
+                # "message is not modified" = konten sama, tidak perlu kirim baru
+                if 'not modified' not in err.lower():
+                    set_state('dashboard_msg_id', '')
+                    _send_new_dashboard(token, chat_id, content)
         else:
-            resp = _tg('sendMessage', token,
-                       json={'chat_id': chat_id, 'text': content, 'parse_mode': 'Markdown'})
-            if resp and resp.get('ok'):
-                set_state('dashboard_msg_id', str(resp['result']['message_id']))
+            _send_new_dashboard(token, chat_id, content)
 
     except Exception:
         pass
+
+
+def _send_new_dashboard(token: str, chat_id: str, content: str):
+    """Kirim pesan dashboard baru dan simpan message_id-nya."""
+    resp = _tg('sendMessage', token,
+               json={'chat_id': chat_id, 'text': content, 'parse_mode': 'Markdown'})
+    if resp and resp.get('ok'):
+        set_state('dashboard_msg_id', str(resp['result']['message_id']))
 
 
 def run_fast_update():
     update_status_dashboard()
 
 
-def send_scan_completion(count, duration, bias):
+def send_scan_completion(count, duration, bias, auto_trade: bool = False):
     token   = CONFIG['api'].get('telegram_bot_token')
     chat_id = CONFIG['api'].get('telegram_chat_id')
     if not token or not chat_id:

@@ -4,3 +4,4 @@ bot_env/*
 *__pycache__/*\
 .venv
 venv
+data/
