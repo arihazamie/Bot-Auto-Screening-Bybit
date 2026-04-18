@@ -2,6 +2,8 @@ import time
 import schedule
 import random
 import os
+import sys
+import io
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -9,6 +11,13 @@ import numpy as np
 import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX #3: Force UTF-8 di Windows agar emoji tidak crash (UnicodeEncodeError cp1252)
+# ─────────────────────────────────────────────────────────────────────────────
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from modules.config_loader import CONFIG
 from modules.exchange import BybitClient
@@ -32,8 +41,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
-        logging.StreamHandler(),                         # print ke terminal
-        logging.FileHandler("data/bot.log", mode="a"),  # simpan ke file
+        logging.StreamHandler(sys.stdout),                              # print ke terminal (UTF-8)
+        logging.FileHandler("data/bot.log", mode="a", encoding="utf-8"),  # simpan ke file (UTF-8)
     ],
 )
 logger = logging.getLogger("Main")
@@ -61,7 +70,7 @@ print(f"📐 Timeframes — Entry: {ENTRY_TF} | Trend: {TREND_TF}")
 # ─────────────────────────────────────────────────────────────────────────────
 # Exchange client (singleton)
 # ─────────────────────────────────────────────────────────────────────────────
-client = BybitClient(debug=DEBUG_MODE)
+client = BybitClient(debug=DEBUG_MODE, auto_trade=AUTO_TRADE_ENABLED)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -232,7 +241,9 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
         # ── 10. Divergence & Tech score ───────────────────────────────────
         step = "divergence"
         div_score, div_msg = detect_divergence(df)
-        tech_score   = 3 + div_score
+        # Base 3 (pattern) + divergence + smc_score kontribusi
+        # Sehingga tidak hanya bergantung pada divergence yang jarang terjadi
+        tech_score   = 3 + div_score + min(smc_score, 2)
         tech_reasons = [f"Pattern: {pattern}", div_msg] + smc_reasons
         min_tech     = CONFIG["strategy"]["min_tech_score"]
 
@@ -440,7 +451,7 @@ if __name__ == "__main__":
     init_db()
 
     # ── Cek koneksi Bybit sebelum mulai ─────────────────────────
-    ok = client.health_check()
+    ok = client.health_check(auto_trade=AUTO_TRADE_ENABLED)
     if not ok:
         print("\n❌ Health check gagal — pastikan:")
         print("   1. Koneksi internet aktif")

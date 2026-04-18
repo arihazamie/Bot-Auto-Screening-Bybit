@@ -122,21 +122,39 @@ class BybitClient:
     # Simbol yang tidak perlu diubah formatnya
     _SYMBOL_CACHE: dict[str, str] = {}
 
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, auto_trade: bool = False):
         self.debug = debug
+        self.auto_trade = auto_trade
+
+        # Hanya set API key jika auto_trade=True.
+        # Signal-only mode tidak butuh key — semua data dari public endpoint CCXT.
+        # Tanpa key, CCXT tidak akan memanggil endpoint private apapun.
+        api_cfg = {}
+        if auto_trade:
+            api_cfg = {
+                "apiKey": CONFIG["api"].get("bybit_key",    ""),
+                "secret": CONFIG["api"].get("bybit_secret", ""),
+            }
 
         self._ex = ccxt.bybit({
-            "apiKey":  CONFIG["api"].get("bybit_key",    ""),
-            "secret":  CONFIG["api"].get("bybit_secret", ""),
+            **api_cfg,
             "options": {
-                "defaultType": "swap",          # Perpetual futures
-                "adjustForTimeDifference": True, # Auto-sync timestamp
+                "defaultType": "swap",            # Perpetual futures
+                "adjustForTimeDifference": True,   # Auto-sync clock dengan Bybit server
+                "recvWindow": 20_000,              # Toleransi clock meleset hingga 20 detik
+                "unifiedAccount": True,            # Bypass auto-detect unified account
             },
-            "enableRateLimit": True,            # CCXT built-in rate limiter
-            "timeout": 15_000,                  # 15 detik timeout per request
+            "enableRateLimit": True,              # CCXT built-in rate limiter
+            "timeout": 15_000,                    # 15 detik timeout per request
         })
 
         logger.info("BybitClient initialized (mode=swap, rateLimit=ON)")
+
+        # FIX: Perbesar connection pool agar tidak "pool is full" saat multi-thread
+        # Default pool size = 10, tapi bot pakai 20 threads → naik ke 30
+        from requests.adapters import HTTPAdapter
+        _adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
+        self._ex.session.mount("https://", _adapter)
 
     # ─────────────────────────────────────────────
     # Symbol normalization
@@ -182,11 +200,17 @@ class BybitClient:
     # ─────────────────────────────────────────────
     # Health check — panggil saat startup
     # ─────────────────────────────────────────────
-    def health_check(self) -> bool:
+    def health_check(self, auto_trade: bool = False) -> bool:
         """
         Verifikasi koneksi ke Bybit dan validasi API key.
         Print ringkasan status ke stdout.
         Return True jika OK, False jika ada masalah.
+
+        Parameter
+        ---------
+        auto_trade : bool
+            True  → private API wajib OK (bot akan trade)
+            False → private API opsional (signal-only, data publik cukup)
         """
         print("\n" + "─" * 50)
         print("🔌 Bybit Connection Health Check")
@@ -208,21 +232,25 @@ class BybitClient:
             print(f"  ❌ Public API  — GAGAL: {type(e).__name__}: {e}")
             ok = False
 
-        # 2. Test API key (private endpoint)
+        # 2. Test API key (private endpoint) — hanya wajib jika auto_trade=True
         api_key = CONFIG["api"].get("bybit_key", "")
         if api_key and api_key != "YOUR_BYBIT_API_KEY":
             try:
                 t0 = time.time()
-                bal = self._ex.fetch_balance()
+                bal = self._ex.fetch_balance(params={"accountType": "UNIFIED"})
                 ms  = (time.time() - t0) * 1000
                 usdt = bal.get("USDT", {}).get("free", 0)
                 print(f"  ✅ Private API — OK ({ms:.0f}ms) | USDT Balance: {usdt:,.2f}")
-            except ccxt.AuthenticationError as e:
-                print(f"  ❌ Private API — AUTH GAGAL: {e}")
-                print(f"     → Cek bybit_key & bybit_secret di config.json")
-                ok = False
             except Exception as e:
-                print(f"  ⚠️  Private API — {type(e).__name__}: {e}")
+                if auto_trade:
+                    # Auto trade mode: private API wajib → ini error fatal
+                    print(f"  ❌ Private API — AUTH GAGAL: {e}")
+                    print(f"     → Cek bybit_key & bybit_secret di config.json")
+                    ok = False
+                else:
+                    # Signal-only mode: private API tidak dipakai → cukup warning
+                    print(f"  ⚠️  Private API — Tidak bisa diakses (signal-only mode, tidak masalah)")
+                    print(f"     → Jika ingin auto trade, tambahkan permission 'Derivatives Read' di API key Bybit")
         else:
             print(f"  ⚠️  Private API — API key tidak dikonfigurasi (signal-only mode OK)")
 

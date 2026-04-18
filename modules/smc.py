@@ -48,11 +48,13 @@ def analyze_smc(df, side):
     # 1. Structure
     struct = get_market_structure(df)
     if side == "Long":
-        if struct == "HL": score += 2; reasons.append("Higher Low")
-        elif struct in ["HH", "LL"]: return False, 0, [f"Avoid Long at {struct}"]
+        if struct == "HL":  score += 2; reasons.append("Higher Low")   # ideal long entry
+        elif struct == "HH": score += 1; reasons.append("HH Breakout") # bullish continuation, OK
+        elif struct in ["LH", "LL"]: return False, 0, [f"Avoid Long at {struct}"]  # bearish
     if side == "Short":
-        if struct == "LH": score += 2; reasons.append("Lower High")
-        elif struct in ["HH", "LL"]: return False, 0, [f"Avoid Short at {struct}"]
+        if struct == "LH":  score += 2; reasons.append("Lower High")   # ideal short entry
+        elif struct == "LL": score += 1; reasons.append("LL Breakdown") # bearish continuation, OK
+        elif struct in ["HL", "HH"]: return False, 0, [f"Avoid Short at {struct}"] # bullish
 
     # 2. Zones
     obs = find_order_blocks(df)

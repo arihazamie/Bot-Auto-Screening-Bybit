@@ -1,141 +1,65 @@
-import requests, json, os, pytz, pandas as pd, numpy as np
-import mplfinance as mpf
-from scipy.signal import argrelextrema
+import requests, json, os, pytz, pandas as pd
+import time
 from datetime import datetime
 from modules.config_loader import CONFIG
 from modules.database import insert_trade, get_trades_open, get_state, set_state
 
 def get_now(): return datetime.now(pytz.timezone(CONFIG['system']['timezone']))
-def format_price(value): return "{:.8f}".format(float(value)).rstrip('0').rstrip('.') if float(value) < 1 else "{:.2f}".format(float(value))
+def format_price(v): return "{:.8f}".format(float(v)).rstrip('0').rstrip('.') if float(v) < 1 else "{:.2f}".format(float(v))
 
 TG_BASE = "https://api.telegram.org/bot{token}/{method}"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIX #1: Normalisasi chat_id ke string yang benar
-# Telegram channel/supergroup menggunakan format -100XXXXXXXXX
-# Jika kamu copas dari Telegram, pastikan sudah menyertakan prefix -100
-# ─────────────────────────────────────────────────────────────────────────────
+
 def normalize_chat_id(chat_id) -> str:
-    """
-    Konversi chat_id ke string dan validasi formatnya.
-    Telegram channels/supergroups harus diawali '-100'.
-    Contoh:
-      - Group biasa       : -123456789       (OK)
-      - Channel/Supergroup: -1003926830212   (BENAR)
-      - SALAH (tanpa -100): -3926830212      (akan gagal untuk channel)
-    """
     chat_id_str = str(chat_id).strip()
-    # Warning jika kemungkinan channel tapi tanpa prefix -100
     if chat_id_str.startswith('-') and not chat_id_str.startswith('-100'):
         numeric_part = chat_id_str.lstrip('-')
-        # Supergroup/channel ID biasanya 10+ digit
         if len(numeric_part) >= 10:
             print(f"⚠️  [TELEGRAM] chat_id '{chat_id_str}' kemungkinan Channel/Supergroup.")
-            print(f"⚠️  Format yang benar untuk channel: '-100{numeric_part}'")
-            print(f"⚠️  Cek: apakah kamu sudah tambahkan prefix -100?")
+            print(f"⚠️  Format yang benar: '-100{numeric_part}'")
     return chat_id_str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIX #2: _tg sekarang log error response dari Telegram API
-# ─────────────────────────────────────────────────────────────────────────────
-def _tg(method, token, **kwargs):
+def _tg(method, token, _retry=3, **kwargs):
+    """Kirim request ke Telegram API dengan retry otomatis jika timeout."""
     url = TG_BASE.format(token=token, method=method)
-    try:
-        r = requests.post(url, timeout=15, **kwargs)
-        data = r.json()
-        # FIX: Log jika Telegram mengembalikan error (ok: false)
-        if not data.get('ok'):
-            err_code = data.get('error_code', '?')
-            err_desc = data.get('description', 'Unknown error')
-            print(f"❌ [Telegram/{method}] Error {err_code}: {err_desc}")
-        return data
-    except Exception as e:
-        print(f"❌ Telegram API Error [{method}]: {e}")
-        return None
-
-
-def generate_chart(df, symbol, pattern, timeframe):
-    filename = f"chart_{symbol.replace('/','_')}_{timeframe}.png"
-    try:
-        plot_df = df.iloc[-100:].copy()
-        if 'timestamp' in plot_df.columns: plot_df.set_index('timestamp', inplace=True)
-        plot_df.index = pd.to_datetime(plot_df.index)
-
-        n = 3
-        min_idx = argrelextrema(plot_df['low'].values, np.less_equal, order=n)[0]
-        max_idx = argrelextrema(plot_df['high'].values, np.greater_equal, order=n)[0]
-
-        peak_dates, peak_vals     = plot_df.index[max_idx], plot_df['high'].iloc[max_idx].values
-        valley_dates, valley_vals = plot_df.index[min_idx], plot_df['low'].iloc[min_idx].values
-
-        lines, colors = [], []
-        def add_line(dates, vals, color):
-            if len(dates) >= 2:
-                lines.append([(str(dates[-2]), float(vals[-2])), (str(dates[-1]), float(vals[-1]))])
-                colors.append(color)
-
-        if pattern in ['ascending_triangle', 'bullish_rectangle', 'double_top', 'bear_flag', 'descending_triangle']:
-            add_line(peak_dates, peak_vals, 'red')
-        if pattern in ['descending_triangle', 'bullish_rectangle', 'double_bottom', 'bull_flag', 'ascending_triangle']:
-            add_line(valley_dates, valley_vals, 'green')
-
-        mc = mpf.make_marketcolors(up='#2ebd85', down='#f6465d', edge='inherit', wick='inherit', volume='in')
-        s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc)
-        apds = []
-        if 'EMA_Fast' in plot_df.columns:
-            apds.append(mpf.make_addplot(plot_df['EMA_Fast'], color='cyan', width=1))
-
-        ratios, vol_panel = (3, 1), 1
-        if 'MACD_h' in plot_df.columns:
-            cols = ['#2ebd85' if v >= 0 else '#f6465d' for v in plot_df['MACD_h']]
-            apds.append(mpf.make_addplot(plot_df['MACD_h'], type='bar', panel=1, color=cols, ylabel='MACD'))
-            ratios, vol_panel = (3, 1, 1), 2
-
-        kwargs = dict(
-            type='candle', style=s, addplot=apds,
-            title=f"\n{symbol} ({timeframe}) - {pattern}",
-            figsize=(12, 8), panel_ratios=ratios,
-            volume=True, volume_panel=vol_panel,
-            savefig=dict(fname=filename, dpi=100, bbox_inches='tight')
-        )
-        if lines:
-            kwargs['alines'] = dict(alines=lines, colors=colors, linewidths=1.5, alpha=0.7)
-        mpf.plot(plot_df, **kwargs)
-        return filename
-    except Exception as e:
-        print(f"Chart Error: {e}")
-        return None
+    for attempt in range(1, _retry + 1):
+        try:
+            r = requests.post(url, timeout=30, **kwargs)
+            data = r.json()
+            if not data.get('ok'):
+                print(f"❌ [Telegram/{method}] Error {data.get('error_code','?')}: {data.get('description','?')}")
+            return data
+        except requests.exceptions.Timeout:
+            if attempt < _retry:
+                print(f"⏳ [Telegram/{method}] Timeout, retry {attempt}/{_retry}...")
+                time.sleep(2 * attempt)
+            else:
+                print(f"❌ [Telegram/{method}] Timeout setelah {_retry}x retry")
+                return None
+        except Exception as e:
+            print(f"❌ Telegram API Error [{method}]: {e}")
+            return None
 
 
 def send_alert(data, auto_trade: bool = False):
-    token   = CONFIG['api'].get('telegram_bot_token')
-    raw_id  = CONFIG['api'].get('telegram_chat_id')
+    token  = CONFIG['api'].get('telegram_bot_token')
+    raw_id = CONFIG['api'].get('telegram_chat_id')
 
-    # FIX #1: Validasi config tidak kosong + normalisasi chat_id
     if not token or not raw_id:
         print("❌ [send_alert] telegram_bot_token atau telegram_chat_id belum diisi di config.json!")
         return False
 
-    chat_id = normalize_chat_id(raw_id)   # ← selalu string yang sudah divalidasi
-
-    symbol     = data['Symbol']
-    image_path = None
-
-    # 1. Generate Chart
-    try:
-        image_path = generate_chart(data['df'], symbol, data['Pattern'], data['Timeframe'])
-    except Exception as e:
-        print(f"❌ Chart Error: {e}")
+    chat_id = normalize_chat_id(raw_id)
+    symbol  = data['Symbol']
 
     try:
-        is_long = data['Side'] == 'Long'
-        emoji   = "🚀" if is_long else "🔻"
-
-        rvol     = data['df']['RVOL'].iloc[-1]
-        rvol_txt = "⚡ Explosive" if rvol > 3.0 else ("🔥 Strong" if rvol > 2.0 else "🌊 Normal")
-        obi_val  = data.get('OBI', 0.0)
-        obi_icon = "🟢" if obi_val > 0 else ("🔴" if obi_val < 0 else "⚪")
+        is_long   = data['Side'] == 'Long'
+        emoji     = "🚀" if is_long else "🔻"
+        rvol      = data['df']['RVOL'].iloc[-1]
+        rvol_txt  = "⚡ Explosive" if rvol > 3.0 else ("🔥 Strong" if rvol > 2.0 else "🌊 Normal")
+        obi_val   = data.get('OBI', 0.0)
+        obi_icon  = "🟢" if obi_val > 0 else ("🔴" if obi_val < 0 else "⚪")
 
         fund_rate = data['df'].get('funding', pd.Series([0])).iloc[-1]
         if isinstance(fund_rate, pd.Series): fund_rate = fund_rate.iloc[-1]
@@ -143,17 +67,10 @@ def send_alert(data, auto_trade: bool = False):
         fund_icon = "🔴" if fund_pct > 0.01 else "🟢"
         fund_txt  = "Hot" if fund_pct > 0.01 else "Cool"
         basis_pct = data.get('Basis', 0) * 100
+        smc_str   = str(data.get('SMC_Reasons', ''))
+        total     = data['Tech_Score'] + data['SMC_Score'] + data['Quant_Score'] + data['Deriv_Score']
 
-        smc_reasons_str = str(data.get('SMC_Reasons', ''))
-        smc_txt = "None"
-        if "Order Block" in smc_reasons_str:
-            smc_txt = "🟢 Demand Zone" if "Bullish" in smc_reasons_str else "🔴 Supply Zone"
-        elif "Structure" in smc_reasons_str:
-            smc_txt = "📈 Higher Low" if "Higher Low" in smc_reasons_str else "📉 Lower High"
-        elif data['SMC_Score'] > 0:
-            smc_txt = "✅ Confluence Found"
-
-        caption = (
+        text = (
             f"{emoji} <b>SIGNAL: {symbol} ({data['Pattern']})</b>\n"
             f"<b>{data['Side']}</b>  |  <b>{data['Timeframe']}</b>\n\n"
             f"🎯 <b>Entry:</b> <code>{format_price(data['Entry'])}</code>\n"
@@ -163,62 +80,20 @@ def send_alert(data, auto_trade: bool = False):
             f"  TP1: <code>{format_price(data['TP1'])}</code>\n"
             f"  TP2: <code>{format_price(data['TP2'])}</code>\n"
             f"  TP3: <code>{format_price(data['TP3'])}</code>\n\n"
-            f"📊 <b>Technicals</b>\n"
-            f"  Pattern: {data['Pattern']}\n"
-            f"  SMC: {smc_txt}\n\n"
-            f"🧮 <b>Quant Models</b>\n"
-            f"  RVOL: <code>{rvol:.1f}x</code> ({rvol_txt})\n"
-            f"  Z-Score: <code>{data.get('Z_Score', 0):.2f}σ</code>\n"
-            f"  ζ-Field: <code>{data.get('Zeta_Score', 0):.1f}</code> / 100\n"
-            f"  OBI: <code>{obi_val:.2f}</code> {obi_icon}\n\n"
+            f"🧮 <b>Quant</b>\n"
+            f"  RVOL: <code>{rvol:.1f}x</code> ({rvol_txt})  OBI: <code>{obi_val:.2f}</code> {obi_icon}\n"
+            f"  Z-Score: <code>{data.get('Z_Score', 0):.2f}σ</code>  ζ: <code>{data.get('Zeta_Score', 0):.1f}</code>/100\n\n"
             f"⛽ <b>Derivatives</b>\n"
-            f"  Funding: <code>{fund_pct:.4f}%</code> {fund_icon} ({fund_txt})\n"
-            f"  Basis: <code>{basis_pct:.4f}%</code>\n"
-            f"  Bias: {data.get('Deriv_Reasons', 'Neutral')}\n\n"
-            f"🏆 <b>Scores</b>\n"
-            f"  Tech: <code>{data['Tech_Score']}</code> | SMC: <code>{data['SMC_Score']}</code> | "
-            f"Quant: <code>{data['Quant_Score']}</code> | Deriv: <code>{data['Deriv_Score']}</code>\n\n"
-            f"📝 <b>Analysis</b>\n"
-            f"  Tech: {data.get('Tech_Reasons', '-')}\n"
-            f"  SMC: {smc_reasons_str if smc_reasons_str else '-'}\n"
-            f"  Quant: {data.get('Quant_Reasons', '-')}\n\n"
-            f"🧠 <b>Context</b>  Bias: <b>{data['BTC_Bias']}</b>\n"
+            f"  Funding: <code>{fund_pct:.4f}%</code> {fund_icon} ({fund_txt})  "
+            f"Basis: <code>{basis_pct:.4f}%</code>\n\n"
+            f"🏆 <b>Score: {total}</b>  "
+            f"(tech={data['Tech_Score']} smc={data['SMC_Score']} quant={data['Quant_Score']} deriv={data['Deriv_Score']})\n"
+            f"🧠 Bias: <b>{data['BTC_Bias']}</b>\n"
             f"<i>V8 Bot | {get_now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
         )
 
-        # FIX #3: sendPhoto caption limit 1024 chars — fallback ke sendMessage jika lebih
-        MAX_CAPTION = 1024
-        resp = None
-        if image_path:
-            if len(caption) <= MAX_CAPTION:
-                with open(image_path, 'rb') as f:
-                    resp = _tg('sendPhoto', token,
-                               data={'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'},
-                               files={'photo': f})
-                # FIX #4: Jika sendPhoto gagal (misal caption error), kirim foto tanpa caption
-                # lalu kirim teks terpisah
-                if resp and not resp.get('ok'):
-                    print(f"⚠️  sendPhoto gagal, mencoba fallback sendPhoto tanpa caption...")
-                    with open(image_path, 'rb') as f:
-                        resp_photo = _tg('sendPhoto', token,
-                                         data={'chat_id': chat_id},
-                                         files={'photo': f})
-                    # Kirim teks secara terpisah
-                    _tg('sendMessage', token,
-                        json={'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'})
-                    resp = resp_photo
-            else:
-                # Caption terlalu panjang: kirim foto tanpa caption + teks terpisah
-                print(f"⚠️  Caption {len(caption)} chars > 1024, kirim foto + teks terpisah")
-                with open(image_path, 'rb') as f:
-                    resp = _tg('sendPhoto', token,
-                               data={'chat_id': chat_id},
-                               files={'photo': f})
-                _tg('sendMessage', token,
-                    json={'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'})
-        else:
-            resp = _tg('sendMessage', token,
-                       json={'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'})
+        resp = _tg('sendMessage', token,
+                   json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'})
 
         if resp and resp.get('ok'):
             msg = resp.get('result', {})
@@ -246,27 +121,23 @@ def send_alert(data, auto_trade: bool = False):
                 "tech_reasons":  data.get('Tech_Reasons', ''),
                 "quant_reasons": data.get('Quant_Reasons', ''),
                 "deriv_reasons": data.get('Deriv_Reasons', ''),
-                "smc_reasons":   smc_reasons_str,
+                "smc_reasons":   smc_str,
                 "message_id":    str(msg.get('message_id', '')),
                 "channel_id":    str(chat_id),
             })
             return True
         else:
-            # FIX #5: Log jika resp.ok = False (sebelumnya silent, tidak ada return)
-            print(f"❌ [send_alert] Pesan TIDAK terkirim ke channel {chat_id}. Resp: {resp}")
+            print(f"❌ [send_alert] Gagal kirim ke {chat_id}. Resp: {resp}")
             return False
 
     except Exception as e:
         print(f"❌ Alert Error: {e}")
         return False
-    finally:
-        if image_path and os.path.exists(image_path):
-            os.remove(image_path)
 
 
 def update_status_dashboard():
-    token   = CONFIG['api'].get('telegram_bot_token')
-    raw_id  = CONFIG['api'].get('telegram_chat_id')
+    token  = CONFIG['api'].get('telegram_bot_token')
+    raw_id = CONFIG['api'].get('telegram_chat_id')
     if not token or not raw_id:
         return
 
@@ -283,8 +154,7 @@ def update_status_dashboard():
             lines.append(f"`{ts_str}` {icon} *{t['symbol']}* ({t['side']}): {t.get('status','')}")
 
         content = "📊 *LIVE DASHBOARD*\n" + ("\n".join(lines) if lines else "No active trades.")
-
-        msg_id = get_state('dashboard_msg_id')
+        msg_id  = get_state('dashboard_msg_id')
 
         if msg_id:
             resp = _tg('editMessageText', token,
@@ -299,7 +169,6 @@ def update_status_dashboard():
             _send_new_dashboard(token, chat_id, content)
 
     except Exception as e:
-        # FIX #6: Log error dashboard (sebelumnya: except Exception: pass)
         print(f"❌ [update_status_dashboard] Error: {e}")
 
 
@@ -315,13 +184,12 @@ def run_fast_update():
 
 
 def send_scan_completion(count, duration, bias, auto_trade: bool = False):
-    token   = CONFIG['api'].get('telegram_bot_token')
-    raw_id  = CONFIG['api'].get('telegram_chat_id')
+    token  = CONFIG['api'].get('telegram_bot_token')
+    raw_id = CONFIG['api'].get('telegram_chat_id')
     if not token or not raw_id:
         return
 
-    chat_id = normalize_chat_id(raw_id)
-
+    chat_id    = normalize_chat_id(raw_id)
     bias_emoji = "📈" if "Bullish" in bias else ("📉" if "Bearish" in bias else "↔️")
     text = (
         f"🔭 *Scan Cycle Complete*\n"
@@ -332,8 +200,7 @@ def send_scan_completion(count, duration, bias, auto_trade: bool = False):
     try:
         resp = _tg('sendMessage', token,
                    json={'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'})
-        # FIX #7: Log jika scan completion gagal terkirim
         if resp and not resp.get('ok'):
-            print(f"❌ [send_scan_completion] Gagal kirim ke {chat_id}: {resp.get('description')}")
+            print(f"❌ [send_scan_completion] Gagal: {resp.get('description')}")
     except Exception as e:
         print(f"❌ [send_scan_completion] Exception: {e}")

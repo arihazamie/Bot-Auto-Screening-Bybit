@@ -12,7 +12,3 @@ numpy>=1.26.0
 
 # Math & Signal
 scipy>=1.11.0
-
-# Charting
-mplfinance>=0.12.10b0
-pytz>=2024.1

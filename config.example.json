@@ -36,13 +36,13 @@
   },
 
   "strategy": {
-    "min_tech_score": 5,
+    "min_tech_score": 3,
     "min_quant_score": 3,
     "risk_reward_min": 3.0
   },
 
   "indicators": {
-    "min_rvol": 2.0
+    "min_rvol": 1.5
   },
 
   "patterns": {
