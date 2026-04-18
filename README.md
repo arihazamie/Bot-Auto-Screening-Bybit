@@ -117,3 +117,18 @@ pnl (Short)    = (entry - exit) × quantity - fee
 ## 📄 Lisensi
 
 MIT License — lihat file `LICENSE`.
+
+📊 Penilaian Bot
+
+| #   | Bidang                | Nilai | Catatan                                                                       |
+| :-- | :-------------------- | :---: | :---------------------------------------------------------------------------- |
+| 1   | Syntax & Import       | 9/10  | Semua file pass AST check, cross-import antar modul valid                     |
+| 2   | Struktur Kode         | 8/10  | Pemisahan modul bersih, daemon thread rapi, JSON storage sederhana tapi cukup |
+| 3   | Paper Trade Logic     | 8/10  | Flow lengkap: ingest→fill→monitor→close, breakeven TP1, partial TP2/TP3       |
+| 4   | PnL & Persentase      | 9/10  | Sudah fix: price%, ROI/margin, ROI/balance, fee taker 0.055% masuk            |
+| 5   | Max Leverage per Coin | 8/10  | Pakai field Bybit yang benar (leverageFilter.maxLeverage), cache thread-safe  |
+| 6   | Error Handling        | 7/10  | 5 bare except: di quant/patterns/derivatives — bisa sembunyikan bug           |
+| 7   | Thread Safety         | 8/10  | DB lock 8 titik, exchange lock, client lock — sudah cukup aman                |
+| 8   | Config & Validasi     | 6/10  | Jika config.json tidak ada → CONFIG = {} → crash tanpa pesan jelas            |
+| 9   | Requirements          | 7/10  | pytz dipakai di telegram_bot.py tapi tidak ada di requirements.txt            |
+| 10  | Telegram              | 7/10  | 8 command tersedia, pakai raw requests (tidak perlu library tambahan)         |
