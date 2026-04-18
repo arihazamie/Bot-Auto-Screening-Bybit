@@ -29,6 +29,7 @@ from modules.smc import analyze_smc
 from modules.patterns import find_pattern
 from modules.telegram_bot import send_alert, run_fast_update, send_scan_completion
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
+from modules.paper_runner import start_paper_runner
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging setup — semua module pakai logger ini
@@ -57,7 +58,7 @@ DEBUG_MODE         = os.getenv("BOT_DEBUG", "").lower() == "true"
 print("=" * 60)
 print("🤖 Bybit Screening Bot v8")
 print("=" * 60)
-print(f"   Mode    : {'AUTO TRADE 🤖' if AUTO_TRADE_ENABLED else 'SIGNAL ONLY 📡'}")
+print(f"   Mode    : {'AUTO TRADE 🤖' if AUTO_TRADE_ENABLED else 'PAPER TRADE 📋 (signal + simulasi)'}")
 print(f"   Debug   : {'ON 🔍' if DEBUG_MODE else 'OFF (set BOT_DEBUG=true untuk verbose)'}")
 print(f"   Env     : {os.getenv('BOT_ENV', 'PROD')}")
 print("=" * 60)
@@ -386,10 +387,10 @@ def scan():
                     success = send_alert(res, auto_trade=AUTO_TRADE_ENABLED)
                     if success:
                         signal_count += 1
-                        if AUTO_TRADE_ENABLED:
-                            save_signal_to_db(res)
-                        else:
-                            logger.info(f"   📡 Signal sent: {res['Symbol']} {res['Side']} [{res['Timeframe']}]")
+                        # Simpan ke DB di KEDUA mode agar paper_runner bisa ingest
+                        save_signal_to_db(res)
+                        mode_tag = "🤖 real" if AUTO_TRADE_ENABLED else "📋 paper"
+                        logger.info(f"   {mode_tag} signal queued: {res['Symbol']} {res['Side']} [{res['Timeframe']}]")
 
     except Exception as e:
         logger.error(f"Scan Error: {type(e).__name__}: {e}", exc_info=True)
@@ -449,6 +450,14 @@ def refresh_daily_watchlist():
 if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
     init_db()
+
+    # ── Auto-start Paper Trader jika mode SIGNAL ONLY ─────────────
+    if not AUTO_TRADE_ENABLED:
+        print()
+        print("📋 Paper Trade Runner — AUTO START")
+        print("   (auto_trade=false → paper trader berjalan di background thread)")
+        print()
+        start_paper_runner()
 
     # ── Cek koneksi Bybit sebelum mulai ─────────────────────────
     ok = client.health_check(auto_trade=AUTO_TRADE_ENABLED)

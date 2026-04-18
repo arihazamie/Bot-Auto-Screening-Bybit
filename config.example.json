@@ -19,6 +19,7 @@
   },
 
   "risk": {
+    "use_max_leverage": false,
     "target_leverage": 25,
     "risk_percent": 0.01,
     "max_positions": 40,
