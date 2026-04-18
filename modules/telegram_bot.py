@@ -10,15 +10,48 @@ def format_price(value): return "{:.8f}".format(float(value)).rstrip('0').rstrip
 
 TG_BASE = "https://api.telegram.org/bot{token}/{method}"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX #1: Normalisasi chat_id ke string yang benar
+# Telegram channel/supergroup menggunakan format -100XXXXXXXXX
+# Jika kamu copas dari Telegram, pastikan sudah menyertakan prefix -100
+# ─────────────────────────────────────────────────────────────────────────────
+def normalize_chat_id(chat_id) -> str:
+    """
+    Konversi chat_id ke string dan validasi formatnya.
+    Telegram channels/supergroups harus diawali '-100'.
+    Contoh:
+      - Group biasa       : -123456789       (OK)
+      - Channel/Supergroup: -1003926830212   (BENAR)
+      - SALAH (tanpa -100): -3926830212      (akan gagal untuk channel)
+    """
+    chat_id_str = str(chat_id).strip()
+    # Warning jika kemungkinan channel tapi tanpa prefix -100
+    if chat_id_str.startswith('-') and not chat_id_str.startswith('-100'):
+        numeric_part = chat_id_str.lstrip('-')
+        # Supergroup/channel ID biasanya 10+ digit
+        if len(numeric_part) >= 10:
+            print(f"⚠️  [TELEGRAM] chat_id '{chat_id_str}' kemungkinan Channel/Supergroup.")
+            print(f"⚠️  Format yang benar untuk channel: '-100{numeric_part}'")
+            print(f"⚠️  Cek: apakah kamu sudah tambahkan prefix -100?")
+    return chat_id_str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX #2: _tg sekarang log error response dari Telegram API
+# ─────────────────────────────────────────────────────────────────────────────
 def _tg(method, token, **kwargs):
     url = TG_BASE.format(token=token, method=method)
     try:
-        r = requests.post(url, **kwargs)
+        r = requests.post(url, timeout=15, **kwargs)
         data = r.json()
-        # Return response apa pun (ok atau tidak) — caller yang handle
+        # FIX: Log jika Telegram mengembalikan error (ok: false)
+        if not data.get('ok'):
+            err_code = data.get('error_code', '?')
+            err_desc = data.get('description', 'Unknown error')
+            print(f"❌ [Telegram/{method}] Error {err_code}: {err_desc}")
         return data
     except Exception as e:
-        print(f"Telegram API Error [{method}]: {e}")
+        print(f"❌ Telegram API Error [{method}]: {e}")
         return None
 
 
@@ -77,9 +110,14 @@ def generate_chart(df, symbol, pattern, timeframe):
 
 def send_alert(data, auto_trade: bool = False):
     token   = CONFIG['api'].get('telegram_bot_token')
-    chat_id = CONFIG['api'].get('telegram_chat_id')
-    if not token or not chat_id:
+    raw_id  = CONFIG['api'].get('telegram_chat_id')
+
+    # FIX #1: Validasi config tidak kosong + normalisasi chat_id
+    if not token or not raw_id:
+        print("❌ [send_alert] telegram_bot_token atau telegram_chat_id belum diisi di config.json!")
         return False
+
+    chat_id = normalize_chat_id(raw_id)   # ← selalu string yang sudah divalidasi
 
     symbol     = data['Symbol']
     image_path = None
@@ -148,12 +186,36 @@ def send_alert(data, auto_trade: bool = False):
             f"<i>V8 Bot | {get_now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
         )
 
+        # FIX #3: sendPhoto caption limit 1024 chars — fallback ke sendMessage jika lebih
+        MAX_CAPTION = 1024
         resp = None
         if image_path:
-            with open(image_path, 'rb') as f:
-                resp = _tg('sendPhoto', token,
-                           data={'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'},
-                           files={'photo': f})
+            if len(caption) <= MAX_CAPTION:
+                with open(image_path, 'rb') as f:
+                    resp = _tg('sendPhoto', token,
+                               data={'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'},
+                               files={'photo': f})
+                # FIX #4: Jika sendPhoto gagal (misal caption error), kirim foto tanpa caption
+                # lalu kirim teks terpisah
+                if resp and not resp.get('ok'):
+                    print(f"⚠️  sendPhoto gagal, mencoba fallback sendPhoto tanpa caption...")
+                    with open(image_path, 'rb') as f:
+                        resp_photo = _tg('sendPhoto', token,
+                                         data={'chat_id': chat_id},
+                                         files={'photo': f})
+                    # Kirim teks secara terpisah
+                    _tg('sendMessage', token,
+                        json={'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'})
+                    resp = resp_photo
+            else:
+                # Caption terlalu panjang: kirim foto tanpa caption + teks terpisah
+                print(f"⚠️  Caption {len(caption)} chars > 1024, kirim foto + teks terpisah")
+                with open(image_path, 'rb') as f:
+                    resp = _tg('sendPhoto', token,
+                               data={'chat_id': chat_id},
+                               files={'photo': f})
+                _tg('sendMessage', token,
+                    json={'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'})
         else:
             resp = _tg('sendMessage', token,
                        json={'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'})
@@ -189,9 +251,13 @@ def send_alert(data, auto_trade: bool = False):
                 "channel_id":    str(chat_id),
             })
             return True
+        else:
+            # FIX #5: Log jika resp.ok = False (sebelumnya silent, tidak ada return)
+            print(f"❌ [send_alert] Pesan TIDAK terkirim ke channel {chat_id}. Resp: {resp}")
+            return False
 
     except Exception as e:
-        print(f"Alert Error: {e}")
+        print(f"❌ Alert Error: {e}")
         return False
     finally:
         if image_path and os.path.exists(image_path):
@@ -200,9 +266,11 @@ def send_alert(data, auto_trade: bool = False):
 
 def update_status_dashboard():
     token   = CONFIG['api'].get('telegram_bot_token')
-    chat_id = CONFIG['api'].get('telegram_chat_id')
-    if not token or not chat_id:
+    raw_id  = CONFIG['api'].get('telegram_chat_id')
+    if not token or not raw_id:
         return
+
+    chat_id = normalize_chat_id(raw_id)
 
     try:
         trades = get_trades_open()
@@ -222,22 +290,20 @@ def update_status_dashboard():
             resp = _tg('editMessageText', token,
                        json={'chat_id': chat_id, 'message_id': int(msg_id),
                              'text': content, 'parse_mode': 'Markdown'})
-            # Jika edit gagal (pesan dihapus / expired / konten sama) → reset & kirim baru
             if resp is None or not resp.get('ok'):
                 err = (resp or {}).get('description', '')
-                # "message is not modified" = konten sama, tidak perlu kirim baru
                 if 'not modified' not in err.lower():
                     set_state('dashboard_msg_id', '')
                     _send_new_dashboard(token, chat_id, content)
         else:
             _send_new_dashboard(token, chat_id, content)
 
-    except Exception:
-        pass
+    except Exception as e:
+        # FIX #6: Log error dashboard (sebelumnya: except Exception: pass)
+        print(f"❌ [update_status_dashboard] Error: {e}")
 
 
 def _send_new_dashboard(token: str, chat_id: str, content: str):
-    """Kirim pesan dashboard baru dan simpan message_id-nya."""
     resp = _tg('sendMessage', token,
                json={'chat_id': chat_id, 'text': content, 'parse_mode': 'Markdown'})
     if resp and resp.get('ok'):
@@ -250,9 +316,12 @@ def run_fast_update():
 
 def send_scan_completion(count, duration, bias, auto_trade: bool = False):
     token   = CONFIG['api'].get('telegram_bot_token')
-    chat_id = CONFIG['api'].get('telegram_chat_id')
-    if not token or not chat_id:
+    raw_id  = CONFIG['api'].get('telegram_chat_id')
+    if not token or not raw_id:
         return
+
+    chat_id = normalize_chat_id(raw_id)
+
     bias_emoji = "📈" if "Bullish" in bias else ("📉" if "Bearish" in bias else "↔️")
     text = (
         f"🔭 *Scan Cycle Complete*\n"
@@ -261,7 +330,10 @@ def send_scan_completion(count, duration, bias, auto_trade: bool = False):
         f"{bias_emoji} Bias:     *{bias}*"
     )
     try:
-        _tg('sendMessage', token,
-            json={'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'})
-    except:
-        pass
+        resp = _tg('sendMessage', token,
+                   json={'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'})
+        # FIX #7: Log jika scan completion gagal terkirim
+        if resp and not resp.get('ok'):
+            print(f"❌ [send_scan_completion] Gagal kirim ke {chat_id}: {resp.get('description')}")
+    except Exception as e:
+        print(f"❌ [send_scan_completion] Exception: {e}")
