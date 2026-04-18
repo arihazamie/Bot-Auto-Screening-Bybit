@@ -16,9 +16,9 @@ import logging
 import threading
 from datetime import datetime
 
-import ccxt
 
 from modules.config_loader import CONFIG
+from modules.exchange import BybitClient
 from modules.database import (
     init_db,
     insert_active_trade,
@@ -45,68 +45,41 @@ RISK_PERCENT     = RISK["risk_percent"]
 MAX_POSITIONS    = RISK["max_positions"]
 MODE             = "PAPER"
 
-# ─── Exchange (public-only — hanya untuk harga) ────────────────────────────
-_exchange: ccxt.bybit | None = None
-_exchange_lock = threading.Lock()
-_markets_cache: dict = {}   # cache market info agar tidak fetch berulang
+# ─── Exchange (public-only — untuk harga & market info) ───────────────────
+_client: BybitClient | None = None
+_client_lock = threading.Lock()
 
 
-def _get_exchange() -> ccxt.bybit:
-    """Lazy-init exchange singleton (public only, tidak butuh API key)."""
-    global _exchange
-    if _exchange is None:
-        with _exchange_lock:
-            if _exchange is None:
-                _exchange = ccxt.bybit({
-                    "apiKey": CONFIG["api"].get("bybit_key", ""),
-                    "secret": CONFIG["api"].get("bybit_secret", ""),
-                    "options": {
-                        "defaultType": "swap",
-                        "adjustForTimeDifference": True,
-                    },
-                })
-                logger.info("📡 PaperRunner — exchange client ready")
-    return _exchange
+def _get_client() -> BybitClient:
+    """Lazy-init BybitClient singleton (public only, tidak butuh API key)."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = BybitClient(debug=False, auto_trade=False)
+                logger.info("📡 PaperRunner — BybitClient ready")
+    return _client
 
 
 def _get_leverage_for(symbol: str) -> int:
     """
     Tentukan leverage yang akan dipakai untuk satu symbol.
 
-    use_max_leverage: true  → ambil max leverage dari Bybit per coin
-                               misal BTC=100x, GALA=25x, DOGE=50x
+    use_max_leverage: true  → ambil max leverage per coin dari Bybit
+                               (BTC=100x, GALA=25x, DOGE=50x, dst)
     use_max_leverage: false → pakai target_leverage dari config (fixed semua coin)
+
+    Sumber data: BybitClient.fetch_max_leverage()
+      → baca info.leverageFilter.maxLeverage (Bybit native, paling akurat)
+      → fallback ke limits.leverage.max (ccxt standard)
+      → fallback ke TARGET_LEV (config)
     """
     if not USE_MAX_LEVERAGE:
         return TARGET_LEV
 
-    global _markets_cache
-    ex = _get_exchange()
-
-    try:
-        # Load markets sekali, cache selamanya selama bot hidup
-        if not _markets_cache:
-            logger.info("📊 Loading market info dari Bybit (untuk max leverage)...")
-            _markets_cache = ex.load_markets()
-
-        mkt     = _markets_cache.get(symbol, {})
-        max_lev = int(
-            float(
-                mkt.get("limits", {})
-                   .get("leverage", {})
-                   .get("max", TARGET_LEV)
-            )
-        )
-
-        if max_lev <= 0:
-            max_lev = TARGET_LEV
-
-        logger.debug(f"[{symbol}] Max leverage Bybit: {max_lev}x")
-        return max_lev
-
-    except Exception as e:
-        logger.warning(f"[{symbol}] Gagal fetch max leverage, fallback ke {TARGET_LEV}x | {e}")
-        return TARGET_LEV
+    client = _get_client()
+    max_lev = client.fetch_max_leverage(symbol, fallback=TARGET_LEV)
+    return max_lev
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -118,7 +91,7 @@ def _ingest_signals():
     if count_open_active_trades() >= MAX_POSITIONS:
         return
 
-    ex = _get_exchange()
+    client = _get_client()
     try:
         equity = get_paper_balance()
     except Exception as e:
@@ -207,11 +180,14 @@ def _execute_pending():
     if not orders:
         return
 
-    ex = _get_exchange()
+    client = _get_client()
     for trade in orders:
         sym = trade["symbol"]
         try:
-            ticker = ex.fetch_ticker(sym)
+            ticker = client.fetch_ticker(sym)
+            if ticker is None:
+                logger.warning(f"Execute pending [{sym}] — ticker kosong, skip")
+                continue
             current_price = float(ticker["last"])
             paper_execute(trade, current_price)
         except Exception as e:
@@ -228,11 +204,14 @@ def _monitor_trades():
     if not open_trades:
         return
 
-    ex = _get_exchange()
+    client = _get_client()
     for trade in open_trades:
         sym = trade["symbol"]
         try:
-            ticker = ex.fetch_ticker(sym)
+            ticker = client.fetch_ticker(sym)
+            if ticker is None:
+                logger.warning(f"Monitor [{sym}] — ticker kosong, skip")
+                continue
             current_price = float(ticker["last"])
             paper_monitor(trade, current_price)
         except Exception as e:
@@ -337,6 +316,16 @@ def _run_loop():
 # ══════════════════════════════════════════════════════════════════════════════
 # PUBLIC ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
+
+def run_paper_update():
+    """
+    Jalankan satu siklus pengecekan paper trade (ingest → execute → monitor).
+    Dipanggil oleh scheduler di main.py setiap 1 menit.
+    """
+    _ingest_signals()
+    _execute_pending()
+    _monitor_trades()
+
 
 def start_paper_runner():
     """

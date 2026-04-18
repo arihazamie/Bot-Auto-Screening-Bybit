@@ -19,6 +19,7 @@ Cara pakai di main.py:
 
 import time
 import logging
+import threading
 from functools import wraps
 from typing import Optional
 
@@ -155,6 +156,10 @@ class BybitClient:
         from requests.adapters import HTTPAdapter
         _adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
         self._ex.session.mount("https://", _adapter)
+
+        # Cache max leverage per symbol (thread-safe)
+        self._leverage_cache: dict[str, int] = {}
+        self._leverage_lock  = threading.Lock()
 
     # ─────────────────────────────────────────────
     # Symbol normalization
@@ -339,6 +344,113 @@ class BybitClient:
         self._dbg("fetch_tickers", f"[{len(normalized)} symbols]", t0, len(tickers))
 
         return tickers
+
+    # ─────────────────────────────────────────────
+    # fetch_max_leverage
+    # ─────────────────────────────────────────────
+    def fetch_max_leverage(self, symbol: str, fallback: int = 10) -> int:
+        """
+        Ambil max leverage dari Bybit untuk satu symbol perpetual.
+
+        Prioritas pembacaan (dari paling akurat):
+          1. info.leverageFilter.maxLeverage  — field Bybit asli, paling reliable
+          2. limits.leverage.max              — field standar ccxt, kadang kosong/0
+          3. fallback                         — dari config atau parameter
+
+        Thread-safe: hasil di-cache per symbol agar tidak request berulang.
+        load_markets() di-cache internal oleh ccxt, jadi overhead-nya hanya
+        sekali per instance.
+
+        Contoh hasil nyata dari Bybit:
+          BTC/USDT:USDT  → 100x
+          ETH/USDT:USDT  → 100x
+          GALA/USDT:USDT → 25x
+          DOGE/USDT:USDT → 50x
+          XRP/USDT:USDT  → 75x
+
+        Parameter
+        ---------
+        symbol   : str — format apapun ('BTC/USDT', 'BTCUSDT', 'BTC/USDT:USDT')
+        fallback : int — leverage default jika data tidak tersedia
+
+        Return
+        ------
+        int — max leverage yang diizinkan Bybit untuk symbol tersebut
+        """
+        sym = self.normalize_symbol(symbol)
+
+        # Return from cache (no lock needed for read — dict lookup is atomic in CPython)
+        if sym in self._leverage_cache:
+            return self._leverage_cache[sym]
+
+        with self._leverage_lock:
+            # Double-check setelah acquire lock
+            if sym in self._leverage_cache:
+                return self._leverage_cache[sym]
+
+            max_lev = fallback
+            try:
+                # ccxt cache markets secara internal — load_markets() aman dipanggil berulang
+                markets = self._ex.load_markets()
+                market  = markets.get(sym, {})
+
+                if not market:
+                    logger.warning(
+                        f"fetch_max_leverage [{sym}] — symbol tidak ditemukan di markets, "
+                        f"fallback={fallback}x"
+                    )
+                    self._leverage_cache[sym] = fallback
+                    return fallback
+
+                # ── Prioritas 1: Bybit native field ──────────────────────────
+                bybit_lev = (
+                    market.get("info", {})
+                          .get("leverageFilter", {})
+                          .get("maxLeverage")
+                )
+                if bybit_lev:
+                    try:
+                        parsed = int(float(bybit_lev))
+                        if parsed > 0:
+                            max_lev = parsed
+                            logger.debug(
+                                f"[{sym}] max_leverage={max_lev}x "
+                                f"(sumber: leverageFilter.maxLeverage)"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+                # ── Prioritas 2: ccxt standar field ──────────────────────────
+                if max_lev == fallback:
+                    ccxt_lev = (
+                        market.get("limits", {})
+                              .get("leverage", {})
+                              .get("max")
+                    )
+                    if ccxt_lev:
+                        try:
+                            parsed = int(float(ccxt_lev))
+                            if parsed > 0:
+                                max_lev = parsed
+                                logger.debug(
+                                    f"[{sym}] max_leverage={max_lev}x "
+                                    f"(sumber: limits.leverage.max)"
+                                )
+                        except (ValueError, TypeError):
+                            pass
+
+                if max_lev <= 0:
+                    max_lev = fallback
+
+            except Exception as e:
+                logger.warning(
+                    f"fetch_max_leverage [{sym}] error — fallback={fallback}x | {e}"
+                )
+                max_lev = fallback
+
+            self._leverage_cache[sym] = max_lev
+            logger.info(f"📊 [{sym}] Max leverage: {max_lev}x (cached)")
+            return max_lev
 
     # ─────────────────────────────────────────────
     # load_markets

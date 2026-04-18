@@ -11,7 +11,7 @@
   "system": {
     "timezone": "Asia/Jakarta",
     "max_threads": 20,
-    "check_interval_hours": 1,
+    "check_interval_minutes": 15,
     "entry_timeframe": "15m",
     "trend_timeframe": "1h",
     "min_candles_analysis": 150,

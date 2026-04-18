@@ -44,10 +44,57 @@ def _fp(v):
     return f"{f:.2f}"
 
 
-def _pct(a, b):
-    """% change from a to b  →  e.g. +1.27%"""
-    if float(a) == 0: return ""
-    return f"{((float(b) - float(a)) / float(a)) * 100:+.2f}%"
+def _pct_price(a, b) -> str:
+    """
+    Persentase perubahan harga dari a ke b.
+    Dipakai untuk menunjukkan jarak TP/SL dari entry.
+    Contoh: entry=100, tp1=105 → +5.00%
+    """
+    a, b = float(a), float(b)
+    if a == 0:
+        return ""
+    return f"{((b - a) / a) * 100:+.2f}%"
+
+
+# Alias pendek untuk backward compat
+_pct = _pct_price
+
+
+def _roi_on_margin(pnl: float, margin: float) -> str:
+    """
+    ROI relatif terhadap margin (modal yang dipertaruhkan).
+    Ini adalah angka yang paling relevan untuk trader leverage.
+
+    Contoh:
+      margin=$1, leverage=50x, entry=9.6, exit=9.7 (Long)
+      qty    = $1 × 50 / 9.6 = 5.208
+      pnl    = (9.7 - 9.6) × 5.208 = $0.5208
+      ROI    = $0.5208 / $1 = +52.08%  (= price_pct × leverage = 1.04% × 50)
+    """
+    if margin <= 0:
+        return ""
+    return f"{(pnl / margin) * 100:+.2f}%"
+
+
+def _roi_on_balance(pnl: float, balance: float) -> str:
+    """
+    ROI relatif terhadap total balance.
+    Contoh: balance=$100, pnl=$0.52 → +0.52%
+    """
+    if balance <= 0:
+        return ""
+    return f"{(pnl / balance) * 100:+.2f}%"
+
+
+def _calc_margin(entry: float, qty: float, lev: int) -> float:
+    """
+    Hitung margin dari entry, qty, dan leverage.
+    Rumus: margin = (entry × qty) / leverage
+    Ini kebalikan dari: qty = (margin × leverage) / entry
+    """
+    if lev <= 0:
+        return entry * qty
+    return (entry * qty) / lev
 
 
 def _side_label(side: str) -> str:
@@ -97,12 +144,24 @@ def paper_execute(trade: dict, current_price: float) -> bool:
     update_active_trade(trade['id'], {"status": "OPEN", "entry_price": current_price})
     logger.info(f"📋 [PAPER] Entry filled: {trade['symbol']} {side} @ {current_price}")
 
-    # Hitung info posisi untuk notifikasi
-    qty    = float(trade.get('quantity', 0))
-    lev    = int(trade.get('leverage', 1))
-    # Estimasi margin dari qty dan leverage
+    qty     = float(trade.get('quantity', 0))
+    lev     = int(trade.get('leverage', 1))
+    margin  = _calc_margin(current_price, qty, lev)
     pos_val = current_price * qty
-    margin  = pos_val / lev if lev > 0 else pos_val
+
+    # Hitung risk % dari setiap level ke entry (price % dan ROI on margin)
+    sl_price_pct = _pct_price(current_price, trade['sl_price'])
+    tp1_price_pct = _pct_price(current_price, trade['tp1'])
+    tp3_price_pct = _pct_price(current_price, trade['tp3'])
+
+    # ROI on margin per level
+    sl_pnl  = _calc_pnl(side, current_price, float(trade['sl_price']), qty, lev)
+    tp1_pnl = _calc_pnl(side, current_price, float(trade['tp1']),      qty, lev)
+    tp3_pnl = _calc_pnl(side, current_price, float(trade['tp3']),      qty, lev)
+
+    sl_roi  = _roi_on_margin(sl_pnl,  margin)
+    tp1_roi = _roi_on_margin(tp1_pnl, margin)
+    tp3_roi = _roi_on_margin(tp3_pnl, margin)
 
     msg = (
         f"{SEP}\n"
@@ -110,12 +169,17 @@ def paper_execute(trade: dict, current_price: float) -> bool:
         f"{SEP}\n\n"
         f"📌 <b>{trade['symbol']}</b>  {_side_label(side)}\n"
         f"💰 Fill    <code>{_fp(current_price)}</code>\n\n"
-        f"🛑 Stop    <code>{_fp(trade['sl_price'])}</code>   <i>({_pct(current_price, trade['sl_price'])})</i>\n"
-        f"🎯 TP1     <code>{_fp(trade['tp1'])}</code>   <i>({_pct(current_price, trade['tp1'])})</i>\n"
+        f"🛑 Stop    <code>{_fp(trade['sl_price'])}</code>  "
+            f"<i>({sl_price_pct} · ROI {sl_roi})</i>\n"
+        f"🎯 TP1     <code>{_fp(trade['tp1'])}</code>  "
+            f"<i>({tp1_price_pct} · ROI {tp1_roi})</i>\n"
         f"🎯 TP2     <code>{_fp(trade['tp2'])}</code>\n"
-        f"🎯 TP3     <code>{_fp(trade['tp3'])}</code>   <i>({_pct(current_price, trade['tp3'])})</i>\n\n"
+        f"🎯 TP3     <code>{_fp(trade['tp3'])}</code>  "
+            f"<i>({tp3_price_pct} · ROI {tp3_roi})</i>\n\n"
         f"{SEP2}\n"
-        f"💼 Margin  <code>${margin:.2f}</code>  ·  Pos  <code>${pos_val:.2f}</code>  ·  Lev  <code>{lev}x</code>\n"
+        f"💼 Margin  <code>${margin:.2f}</code>  ·  "
+            f"Pos  <code>${pos_val:.2f}</code>  ·  "
+            f"Lev  <code>{lev}x</code>\n"
         f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
     )
     send_reply(msg, reply_to_message_id=tg_id)
@@ -159,18 +223,23 @@ def paper_monitor(trade: dict, current_price: float):
     if sl_hit:
         pnl    = _calc_pnl(side, entry, effective_sl, qty, lev)
         reason = "Breakeven SL" if sl_moved else "Stop Loss"
-        _close_paper_trade(t_id, sym, side, entry, effective_sl, pnl, reason, tg_id)
+        _close_paper_trade(t_id, sym, side, entry, effective_sl, pnl, reason, tg_id,
+                           qty=qty, lev=lev)
         return
 
     # ── TP3 Hit (full close) ─────────────────────────────────────────────────
     if tp3_hit:
         pnl = _calc_pnl(side, entry, tp3, qty, lev)
-        _close_paper_trade(t_id, sym, side, entry, tp3, pnl, "TP3", tg_id)
+        _close_paper_trade(t_id, sym, side, entry, tp3, pnl, "TP3", tg_id,
+                           qty=qty, lev=lev)
         return
 
     # ── TP2 Hit (partial, notify once) ───────────────────────────────────────
     if tp2_hit and not trade.get('_tp2_logged'):
-        partial_pnl = _calc_pnl(side, entry, tp2, qty * 0.30, lev)
+        partial_qty = qty * 0.30
+        partial_pnl = _calc_pnl(side, entry, tp2, partial_qty, lev)
+        full_margin  = _calc_margin(entry, qty, lev)
+        partial_margin = full_margin * 0.30
 
         update_active_trade(t_id, {"status": "OPEN_TPS_SET", "_tp2_logged": True})
         logger.info(f"🎯 [PAPER] {sym} TP2 hit @ {current_price}")
@@ -180,16 +249,24 @@ def paper_monitor(trade: dict, current_price: float):
             f"🎯 <b>[PAPER] TP2 Hit</b>\n"
             f"{SEP}\n\n"
             f"📌 <b>{sym}</b>  {_side_label(side)}\n"
-            f"📈 Price  <code>{_fp(current_price)}</code>  →  TP2  <code>{_fp(tp2)}</code>  <i>({_pct(entry, tp2)})</i>\n\n"
-            f"💰 Partial PnL  <code>${partial_pnl:+.4f}</code>  <i>(30% posisi)</i>\n"
-            f"⏳ Holding 40% ke TP3 @ <code>{_fp(tp3)}</code>\n\n"
+            f"📈 TP2  <code>{_fp(tp2)}</code>  "
+                f"<i>({_pct_price(entry, tp2)} dari entry)</i>\n\n"
+            f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  "
+                f"<i>(30% posisi)</i>\n"
+            f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
+                f"<i>(dari ${partial_margin:.2f})</i>\n"
+            f"⏳ Holding 40% ke TP3 @ <code>{_fp(tp3)}</code>  "
+                f"<i>({_pct_price(entry, tp3)})</i>\n\n"
             f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
         )
         send_reply(msg, reply_to_message_id=tg_id)
 
     # ── TP1 Hit → Breakeven ──────────────────────────────────────────────────
     if tp1_hit and not sl_moved:
-        partial_pnl = _calc_pnl(side, entry, tp1, qty * 0.30, lev)
+        partial_qty    = qty * 0.30
+        partial_pnl    = _calc_pnl(side, entry, tp1, partial_qty, lev)
+        full_margin    = _calc_margin(entry, qty, lev)
+        partial_margin = full_margin * 0.30
 
         update_active_trade(t_id, {"is_sl_moved": True})
         logger.info(f"♻️  [PAPER] {sym} TP1 hit — moving SL to breakeven @ {entry}")
@@ -199,8 +276,12 @@ def paper_monitor(trade: dict, current_price: float):
             f"♻️ <b>[PAPER] TP1 Hit — Breakeven Set</b>\n"
             f"{SEP}\n\n"
             f"📌 <b>{sym}</b>  {_side_label(side)}\n"
-            f"📈 Price  <code>{_fp(current_price)}</code>  →  TP1  <code>{_fp(tp1)}</code>  <i>({_pct(entry, tp1)})</i>\n\n"
-            f"💰 Partial PnL  <code>${partial_pnl:+.4f}</code>  <i>(30% posisi)</i>\n"
+            f"📈 TP1  <code>{_fp(tp1)}</code>  "
+                f"<i>({_pct_price(entry, tp1)} dari entry)</i>\n\n"
+            f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  "
+                f"<i>(30% posisi)</i>\n"
+            f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
+                f"<i>(dari ${partial_margin:.2f})</i>\n"
             f"🔒 Stop dipindah → Breakeven @ <code>{_fp(entry)}</code>\n"
             f"⏳ Holding 70% ke TP2 / TP3\n\n"
             f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
@@ -219,6 +300,8 @@ def _close_paper_trade(
     pnl: float,
     reason: str,
     telegram_msg_id: int = None,
+    qty: float = 0.0,
+    lev: int = 1,
 ):
     """Tutup paper trade, update balance, kirim notifikasi Telegram."""
     balance     = get_paper_balance()
@@ -229,14 +312,26 @@ def _close_paper_trade(
     is_win   = pnl >= 0
     emoji    = "✅" if is_win else "❌"
     result   = "PROFIT 🟢" if is_win else "LOSS 🔴"
-    bal_pct  = (pnl / balance * 100) if balance > 0 else 0
     is_sl    = "SL" in reason or "Stop" in reason
     exit_ico = "🛑" if is_sl else "🎯"
 
+    # ── Perhitungan persentase yang benar ─────────────────────────────────
+    # 1. Price % — seberapa jauh harga bergerak dari entry
+    price_pct = _pct_price(entry, exit_price)
+
+    # 2. ROI on margin — keuntungan/kerugian relatif terhadap modal yang dipertaruhkan
+    #    Ini angka paling relevan: +52% artinya modal (margin) naik 52%
+    margin    = _calc_margin(entry, qty, lev) if qty > 0 else 0.0
+    roi_margin = _roi_on_margin(pnl, margin) if margin > 0 else ""
+
+    # 3. ROI on balance — impact ke total akun
+    roi_balance = _roi_on_balance(pnl, balance)
+
     logger.info(
         f"{emoji} [PAPER] {symbol} CLOSED ({reason}) | "
-        f"Entry: {entry} → Exit: {exit_price} | "
-        f"PnL: ${pnl:+.4f} | Balance: ${new_balance:.2f}"
+        f"Entry: {entry} → Exit: {exit_price} ({price_pct}) | "
+        f"PnL: ${pnl:+.4f} | ROI/Margin: {roi_margin} | "
+        f"Balance: ${new_balance:.2f} ({roi_balance})"
     )
 
     msg = (
@@ -246,10 +341,14 @@ def _close_paper_trade(
         f"📌 <b>{symbol}</b>  {_side_label(side)}\n"
         f"📊 Closed by   <b>{reason}</b>\n\n"
         f"📍 Entry    <code>{_fp(entry)}</code>\n"
-        f"{exit_ico} Exit     <code>{_fp(exit_price)}</code>   <i>({_pct(entry, exit_price)})</i>\n\n"
+        f"{exit_ico} Exit     <code>{_fp(exit_price)}</code>  "
+            f"<i>({price_pct} harga)</i>\n\n"
         f"{'━'*11}\n"
-        f"💰 PnL      <code>${pnl:+.4f}</code>   <b>{result}</b>\n"
-        f"💼 Balance  <code>${new_balance:.2f}</code>   <i>({bal_pct:+.2f}%)</i>\n"
+        f"💰 PnL           <code>${pnl:+.4f}</code>   <b>{result}</b>\n"
+        f"📊 ROI/Margin    <code>{roi_margin}</code>  "
+            f"<i>(dari ${margin:.2f}  ×{lev})</i>\n"
+        f"💼 ROI/Balance   <code>{roi_balance}</code>  "
+            f"→  <code>${new_balance:.2f}</code>\n"
         f"{'━'*11}\n\n"
         f"<i>🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
     )
