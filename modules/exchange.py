@@ -164,6 +164,13 @@ class BybitClient:
         self._leverage_lock  = threading.Lock()
         self._leverage_ttl   = 6 * 3600   # 6 jam dalam detik
 
+        # Cache OHLCV per (symbol, timeframe) — mengurangi API call saat scan
+        # TTL = 13 menit (lebih pendek dari interval scan 15 menit agar data tidak basi)
+        # Struktur: { (symbol, timeframe): (DataFrame, fetched_at: float) }
+        self._ohlcv_cache: dict[tuple, tuple] = {}
+        self._ohlcv_lock  = threading.Lock()
+        self._ohlcv_ttl   = 13 * 60   # 13 menit dalam detik
+
     # ─────────────────────────────────────────────
     # Symbol normalization
     # ─────────────────────────────────────────────
@@ -285,18 +292,26 @@ class BybitClient:
     ) -> Optional[pd.DataFrame]:
         """
         Fetch OHLCV dan return sebagai DataFrame.
+        Hasil di-cache selama 13 menit per (symbol, timeframe) untuk mengurangi
+        jumlah API call saat scan banyak pair sekaligus.
 
         Return None jika data tidak cukup (bukan exception).
         Kolom: timestamp (datetime), open, high, low, close, volume
-
-        Contoh:
-            df = client.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=200)
-            if df is None:
-                return  # data tidak cukup
         """
-        sym = self.normalize_symbol(symbol)
-        t0  = time.time()
+        sym       = self.normalize_symbol(symbol)
+        cache_key = (sym, timeframe)
+        now       = time.time()
 
+        # ── Cache read (fast path) ─────────────────────────────────────────
+        cached = self._ohlcv_cache.get(cache_key)
+        if cached is not None:
+            df_cached, fetched_at = cached
+            if now - fetched_at < self._ohlcv_ttl:
+                logger.debug(f"fetch_ohlcv [{sym}/{timeframe}] — cache HIT ({(now - fetched_at):.0f}s old)")
+                return df_cached.copy()
+
+        # ── Cache miss: fetch dari Bybit ───────────────────────────────────
+        t0   = time.time()
         bars = self._ex.fetch_ohlcv(sym, timeframe, limit=limit)
         self._dbg("fetch_ohlcv", sym, t0, len(bars) if bars else 0)
 
@@ -307,6 +322,10 @@ class BybitClient:
         df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+
+        # ── Cache write (thread-safe) ──────────────────────────────────────
+        with self._ohlcv_lock:
+            self._ohlcv_cache[cache_key] = (df.copy(), now)
 
         return df
 

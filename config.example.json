@@ -22,7 +22,9 @@
     "use_max_leverage": false,
     "target_leverage": 25,
     "risk_percent": 0.01,
-    "max_positions": 40,
+    "max_positions": 5,
+    "max_daily_loss_pct": 0.1,
+    "pending_expire_hours": 6,
     "tp_split": [0.3, 0.3, 0.4],
     "paper_balance": 1000.0
   },
@@ -39,6 +41,9 @@
   "strategy": {
     "min_tech_score": 3,
     "min_quant_score": 3,
+    "min_smc_score": 2,
+    "min_deriv_score": 2,
+    "max_entry_drift_pct": 0.03,
     "risk_reward_min": 3.0
   },
 

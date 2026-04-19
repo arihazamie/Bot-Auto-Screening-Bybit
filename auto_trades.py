@@ -146,10 +146,18 @@ def on_position_update(message):
             sl_moved = row.get('is_sl_moved', False)
             hit_tp1 = (side == 'Buy' and mark_price >= tp1) or (side == 'Sell' and mark_price <= tp1)
             if hit_tp1 and not sl_moved:
-                logger.info(f"♻️  WS: {symbol} hit TP1, moving SL to entry…")
+                logger.info(f"♻️  WS: {symbol} hit TP1, moving SL to breakeven @ {entry}…")
                 try:
-                    _ex.set_position_stop_loss(symbol, entry, side.lower())
-                    update_active_trade(t_id, {"is_sl_moved": True})
+                    # Gunakan Bybit set_trading_stop via ccxt private endpoint
+                    _ex.private_post_v5_position_trading_stop({
+                        "category": "linear",
+                        "symbol": symbol.replace("/", "").replace(":USDT", ""),
+                        "stopLoss": str(entry),
+                        "slTriggerBy": "MarkPrice",
+                        "positionIdx": 0,
+                    })
+                    update_active_trade(t_id, {"is_sl_moved": True, "sl_price": entry})
+                    logger.info(f"✅ SL moved to breakeven {symbol} @ {entry}")
                 except Exception as e:
                     logger.error(f"SL move failed {symbol}: {e}")
     except Exception:
@@ -160,9 +168,38 @@ def on_position_update(message):
 # SIGNAL INGESTION
 # ══════════════════════════════════════════════════════════
 
+def _daily_loss_limit_reached() -> bool:
+    """Return True jika total PnL hari ini melampaui batas rugi harian."""
+    max_loss_pct = RISK.get("max_daily_loss_pct", 0.10)
+    try:
+        closed_today = get_closed_trades_last_24h()
+        total_pnl = sum(float(t.get("pnl", 0)) for t in closed_today)
+        balance = get_paper_balance() if not AUTO_TRADE else None
+        if AUTO_TRADE:
+            try:
+                bal_info = client.fetch_balance()
+                balance = float(bal_info["total"]["USDT"])
+            except Exception:
+                return False
+        if balance and balance > 0 and total_pnl < -(balance * max_loss_pct):
+            logger.warning(
+                f"🛑 [{MODE}] Daily loss limit tercapai — PnL: ${total_pnl:.2f} "
+                f"({total_pnl / balance:.1%}) melewati -{max_loss_pct:.0%}. "
+                f"Posisi baru ditahan sampai besok."
+            )
+            return True
+    except Exception as e:
+        logger.debug(f"_daily_loss_limit_reached error: {e}")
+    return False
+
+
 def ingest_signals():
     """Pull waiting signals from DB and create active trades."""
     if count_open_active_trades() >= MAX_POSITIONS:
+        return
+
+    # ✅ Circuit breaker: hentikan posisi baru jika daily loss limit tercapai
+    if _daily_loss_limit_reached():
         return
 
     try:

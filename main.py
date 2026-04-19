@@ -307,6 +307,20 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             logger.debug(f"[{symbol}] skip — R:R={rr} < min={min_rr}")
             return None
 
+        # ── 13. Entry proximity check ──────────────────────────────────────
+        step = "entry_proximity"
+        current_price = float(ticker_info.get("last", 0))
+        if current_price > 0:
+            max_drift = CONFIG["strategy"].get("max_entry_drift_pct", 0.03)
+            drift_pct = abs(current_price - entry) / current_price
+            if drift_pct > max_drift:
+                counters["entry_too_far"] += 1
+                logger.debug(
+                    f"[{symbol}] skip — entry drift {drift_pct:.1%} > max {max_drift:.1%} "
+                    f"(entry={entry:.4f} current={current_price:.4f})"
+                )
+                return None
+
         df["funding"] = float(ticker_info.get("info", {}).get("fundingRate", 0))
 
         total_score = tech_score + smc_score + quant_score + deriv_score
@@ -432,6 +446,7 @@ def scan():
             "low_rvol":       f"RVOL rendah (< {CONFIG['indicators']['min_rvol']}x)",
             "low_tech_score": f"Tech score rendah (< {CONFIG['strategy']['min_tech_score']})",
             "low_rr":         f"R:R rendah (< {CONFIG['strategy'].get('risk_reward_min', 2.0)})",
+            "entry_too_far":  f"Entry terlalu jauh dari harga saat ini (> {CONFIG['strategy'].get('max_entry_drift_pct', 0.03):.0%})",
             "bad_setup":      "Setup invalid (range=0)",
             "duplicate":      "Duplikat signal aktif",
             "exception":      "⚠️  Exception (cek log!)",   # ← ini yang penting

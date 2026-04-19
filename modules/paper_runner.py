@@ -86,9 +86,32 @@ def _get_leverage_for(symbol: str) -> int:
 # SIGNAL INGESTION
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _daily_loss_limit_reached() -> bool:
+    """Return True jika total PnL hari ini melampaui batas rugi harian."""
+    max_loss_pct = RISK.get("max_daily_loss_pct", 0.10)
+    try:
+        closed_today = get_closed_trades_last_24h()
+        total_pnl = sum(float(t.get("pnl", 0)) for t in closed_today)
+        balance = get_paper_balance()
+        if balance > 0 and total_pnl < -(balance * max_loss_pct):
+            logger.warning(
+                f"🛑 Daily loss limit reached — PnL hari ini: ${total_pnl:.2f} "
+                f"({total_pnl / balance:.1%}) > -{max_loss_pct:.0%} limit. "
+                f"Tidak ada posisi baru dibuka."
+            )
+            return True
+    except Exception as e:
+        logger.debug(f"_daily_loss_limit_reached check error: {e}")
+    return False
+
+
 def _ingest_signals():
     """Ambil sinyal WAITING dari DB dan buat paper trade baru."""
     if count_open_active_trades() >= MAX_POSITIONS:
+        return
+
+    # ✅ Circuit breaker: stop buka posisi baru jika daily loss limit tercapai
+    if _daily_loss_limit_reached():
         return
 
     client = _get_client()
@@ -174,7 +197,7 @@ def _ingest_signals():
 # EXECUTE PENDING (simulasi fill entry)
 # ══════════════════════════════════════════════════════════════════════════════
 
-PENDING_EXPIRE_HOURS = 24  # Auto-expire PENDING trade jika entry tidak terisi
+PENDING_EXPIRE_HOURS = RISK.get("pending_expire_hours", 6)  # default 6 jam (aman untuk 15m TF)
 
 
 def _expire_pending_if_old(trade: dict) -> bool:

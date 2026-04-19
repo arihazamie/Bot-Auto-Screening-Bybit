@@ -26,8 +26,11 @@ def get_technicals(df):
     df['EMA_Slow'] = ta.ema(df['close'], length=21)
     stoch = ta.stochrsi(df['close'], length=14, k=3, d=3)
     if stoch is not None:
-        df['stoch_rsi_k'] = stoch[stoch.columns[0]]
-        df['stoch_rsi_d'] = stoch[stoch.columns[1]]
+        k_cols = [c for c in stoch.columns if c.upper().endswith('K_3')]
+        d_cols = [c for c in stoch.columns if c.upper().endswith('D_3')]
+        # fallback ke indeks jika nama kolom tidak match
+        df['stoch_rsi_k'] = stoch[k_cols[0]] if k_cols else stoch.iloc[:, 0]
+        df['stoch_rsi_d'] = stoch[d_cols[0]] if d_cols else stoch.iloc[:, 1]
     
     macd = ta.macd(df['close'])
     if macd is not None:
