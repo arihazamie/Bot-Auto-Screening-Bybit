@@ -3,10 +3,9 @@ database.py — JSON File Storage (no external DB required)
 Data disimpan di folder /data sebagai file .json
 
 Perbaikan v2:
-  ✅ Atomic write — tulis ke temp file lalu rename (mencegah korupsi jika proses mati di tengah write)
-  ✅ _read() menerima default eksplisit — tidak ada lagi hardcode path check fragile
-  ✅ Type hints lengkap di semua fungsi publik
-  ✅ Auto-repair: file korup/kosong → reset ke default (bukan crash)
+  ✅ Atomic write — tulis ke temp file lalu os.replace() (cegah korupsi jika crash)
+  ✅ _read() terima default eksplisit — tidak ada lagi hardcode path check fragile
+  ✅ Auto-repair: file korup/kosong → reset ke default, bot tidak crash
 """
 
 import json
@@ -14,7 +13,6 @@ import os
 import tempfile
 import threading
 from datetime import datetime, timedelta
-from typing import Any, Union
 
 from modules.config_loader import CONFIG
 
@@ -32,17 +30,13 @@ _lock = threading.Lock()
 
 # ─── Helpers ───────────────────────────────────────────────
 
-def _read(path: str, default: Any) -> Any:
+def _read(path: str, default):
     """
-    Baca JSON dari path. Jika file tidak ada atau korup, kembalikan `default`.
-
-    - `default` wajib diisi oleh caller ([] atau {}) agar semantik jelas.
-    - Jika file ada tapi JSON rusak, file di-reset ke `default` dan
-      warning dicetak — lebih baik data kosong daripada bot crash.
+    Baca JSON dari path. Jika file tidak ada atau korup, kembalikan default.
+    File korup di-reset ke default otomatis — bot tidak crash saat startup.
     """
     if not os.path.exists(path):
         return default
-
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read().strip()
@@ -50,36 +44,27 @@ def _read(path: str, default: Any) -> Any:
                 return default
             return json.loads(content)
     except (json.JSONDecodeError, OSError) as e:
-        # File korup → reset ke default agar bot tidak crash
-        print(f"⚠️  [database] File korup, reset ke default: {os.path.basename(path)} | {e}")
+        print(f"warning [database] File korup, reset ke default: {os.path.basename(path)} | {e}")
         _write(path, default)
         return default
 
 
-def _write(path: str, data: Any) -> None:
+def _write(path: str, data):
     """
-    Tulis JSON ke file secara ATOMIC menggunakan temp file + os.replace().
+    Tulis JSON secara ATOMIC: temp file -> fsync -> os.replace().
 
-    Mengapa atomic:
-      - os.replace() adalah operasi atomic di Linux & Windows NTFS.
-      - Jika proses mati saat menulis, file asli TIDAK berubah.
-      - Tanpa ini, crash di tengah write → file JSON parsial → bot tidak bisa start.
-
-    Alur:
-      1. Tulis ke file temp di direktori yang sama (cross-device safe).
-      2. Flush + fsync ke disk.
-      3. os.replace() menggantikan file lama secara atomic.
+    os.replace() atomic di Linux & Windows NTFS — jika proses mati
+    di tengah write, file lama tetap utuh (tidak ada JSON parsial).
     """
     dir_name = os.path.dirname(path)
     os.makedirs(dir_name, exist_ok=True)
-
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, default=str)
             f.flush()
-            os.fsync(f.fileno())   # pastikan data sudah benar-benar di disk
-        os.replace(tmp_path, path)   # atomic: tidak ada window di mana file tidak ada
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -94,28 +79,26 @@ def _next_id(records: list) -> int:
 
 # ─── Init ──────────────────────────────────────────────────
 
-def init_db() -> None:
-    """Buat direktori dan file storage jika belum ada."""
+def init_db():
     os.makedirs(BASE_DIR, exist_ok=True)
-    defaults: list = [
+    for path, default in [
         (SIGNALS_F,  []),
         (TRADES_F,   []),
         (SENT_F,     []),
         (STATE_F,    {}),
         (REPORTS_F,  {}),
         (PAPER_F,    {"balance": CONFIG['risk']['paper_balance']}),
-    ]
-    for path, default in defaults:
+    ]:
         if not os.path.exists(path):
             _write(path, default)
-    print("✅ JSON storage ready (atomic write ON) — folder: data/")
+    print("JSON storage ready (atomic write ON) -- folder: data/")
 
 
 # ─── Signals ───────────────────────────────────────────────
 
 def insert_signal(data: dict) -> int:
     with _lock:
-        records: list = _read(SIGNALS_F, default=[])
+        records = _read(SIGNALS_F, default=[])
         data['id'] = _next_id(records)
         data['ingested'] = False
         data['created_at'] = str(datetime.now())
@@ -128,9 +111,9 @@ def get_waiting_signals() -> list:
     return [s for s in _read(SIGNALS_F, default=[]) if not s.get('ingested')]
 
 
-def mark_signal_ingested(signal_id: int) -> None:
+def mark_signal_ingested(signal_id: int):
     with _lock:
-        records: list = _read(SIGNALS_F, default=[])
+        records = _read(SIGNALS_F, default=[])
         for r in records:
             if r['id'] == signal_id:
                 r['ingested'] = True
@@ -141,7 +124,7 @@ def mark_signal_ingested(signal_id: int) -> None:
 
 def insert_active_trade(data: dict) -> int:
     with _lock:
-        records: list = _read(TRADES_F, default=[])
+        records = _read(TRADES_F, default=[])
         data['id'] = _next_id(records)
         data.setdefault('status', 'PENDING')
         data.setdefault('order_id', None)
@@ -155,9 +138,9 @@ def insert_active_trade(data: dict) -> int:
         return data['id']
 
 
-def update_active_trade(trade_id: int, fields: dict) -> None:
+def update_active_trade(trade_id: int, fields: dict):
     with _lock:
-        records: list = _read(TRADES_F, default=[])
+        records = _read(TRADES_F, default=[])
         for r in records:
             if r['id'] == trade_id:
                 r.update(fields)
@@ -165,7 +148,7 @@ def update_active_trade(trade_id: int, fields: dict) -> None:
         _write(TRADES_F, records)
 
 
-def get_active_trade_by_symbol(symbol: str, status: str = None) -> Union[dict, None]:
+def get_active_trade_by_symbol(symbol: str, status: str = None):
     closed = {'CLOSED', 'CANCELLED', 'FAILED'}
     for r in _read(TRADES_F, default=[]):
         if r['symbol'] != symbol:
@@ -205,20 +188,20 @@ def get_closed_trades_last_24h() -> list:
 # ─── Paper State ───────────────────────────────────────────
 
 def get_paper_balance() -> float:
-    data: dict = _read(PAPER_F, default={"balance": CONFIG['risk']['paper_balance']})
+    data = _read(PAPER_F, default={"balance": CONFIG['risk']['paper_balance']})
     return float(data.get('balance', CONFIG['risk']['paper_balance']))
 
 
-def update_paper_balance(new_balance: float) -> None:
+def update_paper_balance(new_balance: float):
     with _lock:
         _write(PAPER_F, {"balance": new_balance, "updated_at": str(datetime.now())})
 
 
 # ─── Daily Reports ─────────────────────────────────────────
 
-def save_daily_report(date_str: str, data: dict) -> None:
+def save_daily_report(date_str: str, data: dict):
     with _lock:
-        reports: dict = _read(REPORTS_F, default={})
+        reports = _read(REPORTS_F, default={})
         reports[date_str] = data
         _write(REPORTS_F, reports)
 
@@ -228,7 +211,7 @@ def save_daily_report(date_str: str, data: dict) -> None:
 def insert_trade(data: dict) -> int:
     """Simpan sinyal yang sudah berhasil dikirim ke Telegram."""
     with _lock:
-        records: list = _read(SENT_F, default=[])
+        records = _read(SENT_F, default=[])
         data['id'] = _next_id(records)
         data.setdefault('status', 'OPEN')
         data['created_at'] = str(datetime.now())
@@ -248,7 +231,7 @@ def get_active_signals() -> set:
     Dipakai main.py untuk skip duplikat saat scanning.
     """
     closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    result: set = set()
+    result = set()
     for r in _read(SENT_F, default=[]):
         if r.get('status') not in closed:
             result.add((r.get('symbol', ''), r.get('timeframe', '')))
@@ -257,15 +240,15 @@ def get_active_signals() -> set:
 
 # ─── State Store (key-value untuk dashboard msg id, dll) ───
 
-def get_state(key: str) -> Union[str, None]:
+def get_state(key: str):
     """Ambil nilai dari state store. Return None jika tidak ada."""
     return _read(STATE_F, default={}).get(key)
 
 
-def set_state(key: str, value: str) -> None:
+def set_state(key: str, value: str):
     """Simpan nilai ke state store."""
     with _lock:
-        data: dict = _read(STATE_F, default={})
+        data = _read(STATE_F, default={})
         data[key] = value
         _write(STATE_F, data)
 
@@ -277,8 +260,8 @@ def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
     Konversi hasil analyze_ticker ke format signal queue
     yang bisa dibaca paper_runner.py via get_waiting_signals().
 
-    ✅ telegram_msg_id: Telegram message_id dari signal alert yang dikirim,
-       disimpan agar paper_runner bisa reply ke pesan aslinya.
+    telegram_msg_id: Telegram message_id dari signal alert yang dikirim,
+    disimpan agar paper_runner bisa reply ke pesan aslinya.
     """
     return insert_signal({
         "symbol":          res['Symbol'],

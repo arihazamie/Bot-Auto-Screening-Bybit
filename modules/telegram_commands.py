@@ -39,12 +39,16 @@ _BASE    = f"https://api.telegram.org/bot{_TOKEN}"
 _ENABLED = bool(_TOKEN and _CHAT_ID and 'YOUR_' not in _TOKEN)
 
 # Flag global untuk pause/resume scanning — dibaca oleh main.py
-_paused = False
+# Menggunakan threading.Event agar thread-safe:
+#   - set()     → pause (Telegram handler thread)
+#   - clear()   → resume (Telegram handler thread)
+#   - is_set()  → cek status (main scan thread) — atomic, tidak butuh lock
+_paused = threading.Event()
 
 
 def is_paused() -> bool:
-    """Dibaca oleh main.py untuk skip scan cycle jika paused."""
-    return _paused
+    """Dibaca oleh main.py untuk skip scan cycle jika paused. Thread-safe."""
+    return _paused.is_set()
 
 
 def _send(chat_id, text: str, reply_to: int = None):
@@ -139,7 +143,6 @@ def _cmd_balance(chat_id, msg_id):
 
 
 def _cmd_status(chat_id, msg_id):
-    global _paused
     try:
         balance     = get_paper_balance()
         risk_pct    = float(CONFIG['risk'].get('risk_percent', 0.01))
@@ -163,7 +166,7 @@ def _cmd_status(chat_id, msg_id):
 
         free_balance = balance - used_margin
         margin_pct   = (used_margin / balance * 100) if balance > 0 else 0
-        pause_tag    = "⏸ <b>SCANNING PAUSED</b>\n\n" if _paused else ""
+        pause_tag    = "⏸ <b>SCANNING PAUSED</b>\n\n" if _paused.is_set() else ""
 
         header = (
             f"{pause_tag}"
@@ -286,16 +289,14 @@ def _cmd_report(chat_id, msg_id):
 
 
 def _cmd_pause(chat_id, msg_id):
-    global _paused
-    _paused = True
+    _paused.set()
     set_state('bot_paused', '1')
     logger.info("⏸ Bot scanning di-PAUSE via Telegram command")
     _send(chat_id, "⏸ <b>Scanning di-pause.</b>\nBot tidak akan proses sinyal baru.\nKirim /resume untuk lanjutkan.", reply_to=msg_id)
 
 
 def _cmd_resume(chat_id, msg_id):
-    global _paused
-    _paused = False
+    _paused.clear()
     set_state('bot_paused', '0')
     logger.info("▶️ Bot scanning di-RESUME via Telegram command")
     _send(chat_id, "▶️ <b>Scanning dilanjutkan.</b>\nBot kembali aktif memproses sinyal.", reply_to=msg_id)
@@ -367,12 +368,11 @@ def _poll_loop():
     Long polling loop — terus minta update dari Telegram.
     Menggunakan offset agar update yang sudah diproses tidak diulang.
     """
-    global _paused
     logger.info("🎧 TelegramCmd polling started — siap terima perintah")
 
     # Restore pause state dari DB (jika bot restart)
     if get_state('bot_paused') == '1':
-        _paused = True
+        _paused.set()
         logger.info("⏸ Bot dimulai dalam kondisi PAUSED (state dari DB)")
 
     offset = 0
