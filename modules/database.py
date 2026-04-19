@@ -1,12 +1,20 @@
 """
-database.py — JSON File Storage (no PostgreSQL required)
+database.py — JSON File Storage (no external DB required)
 Data disimpan di folder /data sebagai file .json
+
+Perbaikan v2:
+  ✅ Atomic write — tulis ke temp file lalu rename (mencegah korupsi jika proses mati di tengah write)
+  ✅ _read() menerima default eksplisit — tidak ada lagi hardcode path check fragile
+  ✅ Type hints lengkap di semua fungsi publik
+  ✅ Auto-repair: file korup/kosong → reset ke default (bukan crash)
 """
 
 import json
 import os
+import tempfile
 import threading
 from datetime import datetime, timedelta
+from typing import Any, Union
 
 from modules.config_loader import CONFIG
 
@@ -24,16 +32,60 @@ _lock = threading.Lock()
 
 # ─── Helpers ───────────────────────────────────────────────
 
-def _read(path: str) -> list | dict:
+def _read(path: str, default: Any) -> Any:
+    """
+    Baca JSON dari path. Jika file tidak ada atau korup, kembalikan `default`.
+
+    - `default` wajib diisi oleh caller ([] atau {}) agar semantik jelas.
+    - Jika file ada tapi JSON rusak, file di-reset ke `default` dan
+      warning dicetak — lebih baik data kosong daripada bot crash.
+    """
     if not os.path.exists(path):
-        return [] if path != PAPER_F and path != REPORTS_F else {}
-    with open(path, 'r') as f:
-        return json.load(f)
+        return default
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+            if not content:
+                return default
+            return json.loads(content)
+    except (json.JSONDecodeError, OSError) as e:
+        # File korup → reset ke default agar bot tidak crash
+        print(f"⚠️  [database] File korup, reset ke default: {os.path.basename(path)} | {e}")
+        _write(path, default)
+        return default
 
 
-def _write(path: str, data):
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2, default=str)
+def _write(path: str, data: Any) -> None:
+    """
+    Tulis JSON ke file secara ATOMIC menggunakan temp file + os.replace().
+
+    Mengapa atomic:
+      - os.replace() adalah operasi atomic di Linux & Windows NTFS.
+      - Jika proses mati saat menulis, file asli TIDAK berubah.
+      - Tanpa ini, crash di tengah write → file JSON parsial → bot tidak bisa start.
+
+    Alur:
+      1. Tulis ke file temp di direktori yang sama (cross-device safe).
+      2. Flush + fsync ke disk.
+      3. os.replace() menggantikan file lama secara atomic.
+    """
+    dir_name = os.path.dirname(path)
+    os.makedirs(dir_name, exist_ok=True)
+
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())   # pastikan data sudah benar-benar di disk
+        os.replace(tmp_path, path)   # atomic: tidak ada window di mana file tidak ada
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _next_id(records: list) -> int:
@@ -42,26 +94,28 @@ def _next_id(records: list) -> int:
 
 # ─── Init ──────────────────────────────────────────────────
 
-def init_db():
+def init_db() -> None:
+    """Buat direktori dan file storage jika belum ada."""
     os.makedirs(BASE_DIR, exist_ok=True)
-    for path, default in [
+    defaults: list = [
         (SIGNALS_F,  []),
         (TRADES_F,   []),
         (SENT_F,     []),
         (STATE_F,    {}),
         (REPORTS_F,  {}),
         (PAPER_F,    {"balance": CONFIG['risk']['paper_balance']}),
-    ]:
+    ]
+    for path, default in defaults:
         if not os.path.exists(path):
             _write(path, default)
-    print("✅ JSON storage ready — folder: data/")
+    print("✅ JSON storage ready (atomic write ON) — folder: data/")
 
 
 # ─── Signals ───────────────────────────────────────────────
 
 def insert_signal(data: dict) -> int:
     with _lock:
-        records = _read(SIGNALS_F)
+        records: list = _read(SIGNALS_F, default=[])
         data['id'] = _next_id(records)
         data['ingested'] = False
         data['created_at'] = str(datetime.now())
@@ -71,12 +125,12 @@ def insert_signal(data: dict) -> int:
 
 
 def get_waiting_signals() -> list:
-    return [s for s in _read(SIGNALS_F) if not s.get('ingested')]
+    return [s for s in _read(SIGNALS_F, default=[]) if not s.get('ingested')]
 
 
-def mark_signal_ingested(signal_id: int):
+def mark_signal_ingested(signal_id: int) -> None:
     with _lock:
-        records = _read(SIGNALS_F)
+        records: list = _read(SIGNALS_F, default=[])
         for r in records:
             if r['id'] == signal_id:
                 r['ingested'] = True
@@ -87,13 +141,13 @@ def mark_signal_ingested(signal_id: int):
 
 def insert_active_trade(data: dict) -> int:
     with _lock:
-        records = _read(TRADES_F)
+        records: list = _read(TRADES_F, default=[])
         data['id'] = _next_id(records)
         data.setdefault('status', 'PENDING')
         data.setdefault('order_id', None)
         data.setdefault('is_sl_moved', False)
         data.setdefault('pnl', 0)
-        data.setdefault('telegram_msg_id', None)   # ✅ store original signal Telegram msg_id
+        data.setdefault('telegram_msg_id', None)
         data['created_at'] = str(datetime.now())
         data['updated_at'] = str(datetime.now())
         records.append(data)
@@ -101,9 +155,9 @@ def insert_active_trade(data: dict) -> int:
         return data['id']
 
 
-def update_active_trade(trade_id: int, fields: dict):
+def update_active_trade(trade_id: int, fields: dict) -> None:
     with _lock:
-        records = _read(TRADES_F)
+        records: list = _read(TRADES_F, default=[])
         for r in records:
             if r['id'] == trade_id:
                 r.update(fields)
@@ -111,9 +165,9 @@ def update_active_trade(trade_id: int, fields: dict):
         _write(TRADES_F, records)
 
 
-def get_active_trade_by_symbol(symbol: str, status: str = None):
+def get_active_trade_by_symbol(symbol: str, status: str = None) -> Union[dict, None]:
     closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    for r in _read(TRADES_F):
+    for r in _read(TRADES_F, default=[]):
         if r['symbol'] != symbol:
             continue
         if status and r.get('status') != status:
@@ -125,18 +179,18 @@ def get_active_trade_by_symbol(symbol: str, status: str = None):
 
 
 def get_active_trades_by_status(statuses: list) -> list:
-    return [r for r in _read(TRADES_F) if r.get('status') in statuses]
+    return [r for r in _read(TRADES_F, default=[]) if r.get('status') in statuses]
 
 
 def count_open_active_trades() -> int:
     closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    return sum(1 for r in _read(TRADES_F) if r.get('status') not in closed)
+    return sum(1 for r in _read(TRADES_F, default=[]) if r.get('status') not in closed)
 
 
 def get_closed_trades_last_24h() -> list:
     since = datetime.now() - timedelta(hours=24)
     result = []
-    for r in _read(TRADES_F):
+    for r in _read(TRADES_F, default=[]):
         if r.get('status') != 'CLOSED':
             continue
         try:
@@ -151,20 +205,20 @@ def get_closed_trades_last_24h() -> list:
 # ─── Paper State ───────────────────────────────────────────
 
 def get_paper_balance() -> float:
-    data = _read(PAPER_F)
+    data: dict = _read(PAPER_F, default={"balance": CONFIG['risk']['paper_balance']})
     return float(data.get('balance', CONFIG['risk']['paper_balance']))
 
 
-def update_paper_balance(new_balance: float):
+def update_paper_balance(new_balance: float) -> None:
     with _lock:
         _write(PAPER_F, {"balance": new_balance, "updated_at": str(datetime.now())})
 
 
 # ─── Daily Reports ─────────────────────────────────────────
 
-def save_daily_report(date_str: str, data: dict):
+def save_daily_report(date_str: str, data: dict) -> None:
     with _lock:
-        reports = _read(REPORTS_F)
+        reports: dict = _read(REPORTS_F, default={})
         reports[date_str] = data
         _write(REPORTS_F, reports)
 
@@ -174,7 +228,7 @@ def save_daily_report(date_str: str, data: dict):
 def insert_trade(data: dict) -> int:
     """Simpan sinyal yang sudah berhasil dikirim ke Telegram."""
     with _lock:
-        records = _read(SENT_F)
+        records: list = _read(SENT_F, default=[])
         data['id'] = _next_id(records)
         data.setdefault('status', 'OPEN')
         data['created_at'] = str(datetime.now())
@@ -185,7 +239,7 @@ def insert_trade(data: dict) -> int:
 
 def get_trades_open() -> list:
     """Ambil semua sinyal dengan status OPEN untuk dashboard."""
-    return [r for r in _read(SENT_F) if r.get('status') == 'OPEN']
+    return [r for r in _read(SENT_F, default=[]) if r.get('status') == 'OPEN']
 
 
 def get_active_signals() -> set:
@@ -194,8 +248,8 @@ def get_active_signals() -> set:
     Dipakai main.py untuk skip duplikat saat scanning.
     """
     closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    result = set()
-    for r in _read(SENT_F):
+    result: set = set()
+    for r in _read(SENT_F, default=[]):
         if r.get('status') not in closed:
             result.add((r.get('symbol', ''), r.get('timeframe', '')))
     return result
@@ -203,15 +257,15 @@ def get_active_signals() -> set:
 
 # ─── State Store (key-value untuk dashboard msg id, dll) ───
 
-def get_state(key: str):
+def get_state(key: str) -> Union[str, None]:
     """Ambil nilai dari state store. Return None jika tidak ada."""
-    return _read(STATE_F).get(key)
+    return _read(STATE_F, default={}).get(key)
 
 
-def set_state(key: str, value: str):
+def set_state(key: str, value: str) -> None:
     """Simpan nilai ke state store."""
     with _lock:
-        data = _read(STATE_F)
+        data: dict = _read(STATE_F, default={})
         data[key] = value
         _write(STATE_F, data)
 
@@ -238,5 +292,5 @@ def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
         "rr":              res['RR'],
         "pattern":         res['Pattern'],
         "btc_bias":        res['BTC_Bias'],
-        "telegram_msg_id": telegram_msg_id,   # ✅ link ke pesan Telegram asli
+        "telegram_msg_id": telegram_msg_id,
     })

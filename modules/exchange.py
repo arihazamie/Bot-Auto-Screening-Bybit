@@ -157,9 +157,12 @@ class BybitClient:
         _adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30)
         self._ex.session.mount("https://", _adapter)
 
-        # Cache max leverage per symbol (thread-safe)
-        self._leverage_cache: dict[str, int] = {}
+        # Cache max leverage per symbol (thread-safe + TTL)
+        # Struktur: { symbol: (max_leverage: int, fetched_at: float) }
+        # TTL default 6 jam — Bybit sesekali mengubah max leverage per coin
+        self._leverage_cache: dict[str, tuple[int, float]] = {}
         self._leverage_lock  = threading.Lock()
+        self._leverage_ttl   = 6 * 3600   # 6 jam dalam detik
 
     # ─────────────────────────────────────────────
     # Symbol normalization
@@ -358,8 +361,14 @@ class BybitClient:
           3. fallback                         — dari config atau parameter
 
         Thread-safe: hasil di-cache per symbol agar tidak request berulang.
-        load_markets() di-cache internal oleh ccxt, jadi overhead-nya hanya
-        sekali per instance.
+        TTL 6 jam: cache di-invalidate otomatis karena Bybit bisa mengubah max
+        leverage per coin (terutama coin baru atau saat market crash).
+
+        Error handling:
+          - Jika load_markets() gagal karena error SEMENTARA (NetworkError, timeout),
+            kembalikan fallback TANPA menyimpan ke cache, sehingga request berikutnya
+            tetap mencoba fetch ulang.
+          - Jika symbol memang tidak ada di Bybit, baru cache fallback-nya.
 
         Contoh hasil nyata dari Bybit:
           BTC/USDT:USDT  → 100x
@@ -379,16 +388,27 @@ class BybitClient:
         """
         sym = self.normalize_symbol(symbol)
 
-        # Return from cache (no lock needed for read — dict lookup is atomic in CPython)
-        if sym in self._leverage_cache:
-            return self._leverage_cache[sym]
+        # ── Fast path: cache hit yang belum expired ───────────────────────────
+        # Baca tuple (value, timestamp) dari cache; tidak perlu lock untuk read
+        # karena dict lookup atomic di CPython dan kita hanya baca
+        cached = self._leverage_cache.get(sym)
+        if cached is not None:
+            cached_value, fetched_at = cached
+            if (time.time() - fetched_at) < self._leverage_ttl:
+                return cached_value
+            # TTL expired → hapus dari cache, lanjut fetch ulang
+            logger.debug(f"[{sym}] leverage cache expired (TTL {self._leverage_ttl/3600:.0f}h) — refresh")
 
         with self._leverage_lock:
-            # Double-check setelah acquire lock
-            if sym in self._leverage_cache:
-                return self._leverage_cache[sym]
+            # Double-check setelah acquire lock (cegah thundering herd)
+            cached = self._leverage_cache.get(sym)
+            if cached is not None:
+                cached_value, fetched_at = cached
+                if (time.time() - fetched_at) < self._leverage_ttl:
+                    return cached_value
 
             max_lev = fallback
+            symbol_found = False
             try:
                 # ccxt cache markets secara internal — load_markets() aman dipanggil berulang
                 markets = self._ex.load_markets()
@@ -399,8 +419,11 @@ class BybitClient:
                         f"fetch_max_leverage [{sym}] — symbol tidak ditemukan di markets, "
                         f"fallback={fallback}x"
                     )
-                    self._leverage_cache[sym] = fallback
+                    # Symbol tidak ada → cache fallback (bukan error sementara)
+                    self._leverage_cache[sym] = (fallback, time.time())
                     return fallback
+
+                symbol_found = True
 
                 # ── Prioritas 1: Bybit native field ──────────────────────────
                 bybit_lev = (
@@ -442,15 +465,106 @@ class BybitClient:
                 if max_lev <= 0:
                     max_lev = fallback
 
+            except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
+                # Error SEMENTARA: jaringan/timeout → jangan cache, coba lagi nanti
+                logger.warning(
+                    f"fetch_max_leverage [{sym}] network error — fallback={fallback}x "
+                    f"(tidak di-cache, akan retry) | {e}"
+                )
+                return fallback
+
             except Exception as e:
                 logger.warning(
                     f"fetch_max_leverage [{sym}] error — fallback={fallback}x | {e}"
                 )
-                max_lev = fallback
+                # Error tak terduga: cache fallback dengan TTL pendek (1 jam)
+                # agar tidak terus-terusan retry tapi juga tidak stuck selamanya
+                self._leverage_cache[sym] = (fallback, time.time() - self._leverage_ttl + 3600)
+                return fallback
 
-            self._leverage_cache[sym] = max_lev
-            logger.info(f"📊 [{sym}] Max leverage: {max_lev}x (cached)")
+            # Simpan ke cache dengan timestamp saat ini
+            self._leverage_cache[sym] = (max_lev, time.time())
+            src = "Bybit data" if symbol_found else "fallback"
+            logger.info(f"📊 [{sym}] Max leverage: {max_lev}x (cached, TTL {self._leverage_ttl/3600:.0f}h, src={src})")
             return max_lev
+
+    def prefetch_leverage(self, symbols: list[str]) -> None:
+        """
+        Warm-up cache leverage untuk banyak symbol sekaligus.
+
+        Memanggil load_markets() SEKALI (ccxt sudah cache internal), lalu
+        parsing tiap symbol tanpa request tambahan. Ideal dipanggil saat
+        startup setelah watchlist dimuat — sebelum scan pertama — sehingga
+        scan tidak terhambat fetch leverage satu per satu.
+
+        Contoh di main.py (setelah refresh_watchlist):
+            client.prefetch_leverage(get_watchlist())
+
+        Parameter
+        ---------
+        symbols : list[str] — list symbol format apapun
+        """
+        if not symbols:
+            return
+
+        logger.info(f"📊 Prefetch leverage cache untuk {len(symbols)} symbols...")
+        try:
+            markets = self._ex.load_markets()
+        except Exception as e:
+            logger.warning(f"prefetch_leverage: load_markets() gagal — skip | {e}")
+            return
+
+        now = time.time()
+        hit = 0
+        for symbol in symbols:
+            sym = self.normalize_symbol(symbol)
+
+            # Skip jika cache masih valid
+            cached = self._leverage_cache.get(sym)
+            if cached and (now - cached[1]) < self._leverage_ttl:
+                hit += 1
+                continue
+
+            market = markets.get(sym, {})
+            if not market:
+                continue
+
+            max_lev: int = 10  # default
+            bybit_lev = (
+                market.get("info", {})
+                      .get("leverageFilter", {})
+                      .get("maxLeverage")
+            )
+            if bybit_lev:
+                try:
+                    parsed = int(float(bybit_lev))
+                    if parsed > 0:
+                        max_lev = parsed
+                except (ValueError, TypeError):
+                    pass
+
+            if max_lev == 10:
+                ccxt_lev = (
+                    market.get("limits", {})
+                          .get("leverage", {})
+                          .get("max")
+                )
+                if ccxt_lev:
+                    try:
+                        parsed = int(float(ccxt_lev))
+                        if parsed > 0:
+                            max_lev = parsed
+                    except (ValueError, TypeError):
+                        pass
+
+            with self._leverage_lock:
+                self._leverage_cache[sym] = (max_lev, now)
+
+        fetched = len(symbols) - hit
+        logger.info(
+            f"✅ Leverage cache warm-up selesai: "
+            f"{fetched} fetched, {hit} already cached"
+        )
 
     # ─────────────────────────────────────────────
     # load_markets
