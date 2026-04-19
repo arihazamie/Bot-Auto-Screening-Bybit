@@ -11,6 +11,7 @@ import ccxt
 import time
 import schedule
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pybit.unified_trading import WebSocket
 
@@ -42,21 +43,26 @@ TP_SPLIT       = RISK['tp_split']
 MODE           = "REAL" if AUTO_TRADE else "PAPER"
 
 # ─── Logging ───────────────────────────────────────────────
+# Konfigurasi hanya dilakukan saat dijalankan langsung (standalone).
+# Saat di-import oleh main.py, root logger sudah dikonfigurasi di sana
+# (termasuk RotatingFileHandler untuk data/bot.log).
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%H:%M:%S'
-)
 logger = logging.getLogger("AutoTrader")
 
-# ─── Exchange (always init for price data) ─────────────────
+# ─── Exchange (API key hanya dimuat saat REAL mode) ────────
+# Paper mode hanya butuh public endpoint (fetch_ticker, load_markets)
+# sehingga tidak perlu meng-ekspos credential ke library.
 
-exchange = ccxt.bybit({
-    'apiKey': CONFIG['api']['bybit_key'],
-    'secret': CONFIG['api']['bybit_secret'],
-    'options': {'defaultType': 'swap', 'adjustForTimeDifference': True}
-})
+_exchange_opts: dict = {'options': {'defaultType': 'swap', 'adjustForTimeDifference': True}}
+if AUTO_TRADE:
+    bybit_key    = CONFIG['api'].get('bybit_key', '')
+    bybit_secret = CONFIG['api'].get('bybit_secret', '')
+    if not bybit_key or not bybit_secret or 'YOUR_' in bybit_key:
+        raise ValueError("auto_trade=true tetapi bybit_key / bybit_secret belum diisi di config.json")
+    _exchange_opts['apiKey'] = bybit_key
+    _exchange_opts['secret'] = bybit_secret
+
+exchange = ccxt.bybit(_exchange_opts)
 
 
 # ══════════════════════════════════════════════════════════
@@ -387,6 +393,22 @@ def daily_report():
 # ══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # ─── Standalone logging (tidak di-import oleh main.py) ─────────────────
+    import os, sys
+    os.makedirs("data", exist_ok=True)
+    LOG_LEVEL = logging.DEBUG if os.getenv("BOT_DEBUG", "").lower() == "true" else logging.INFO
+    logging.basicConfig(
+        level=LOG_LEVEL,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            RotatingFileHandler(
+                "data/bot.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+            ),
+        ],
+    )
+    # ────────────────────────────────────────────────────────────────────────
     mode_banner = "💰 REAL TRADE MODE" if AUTO_TRADE else "📋 PAPER TRADE MODE"
     logger.info(f"🟢 Starting Auto-Trader — {mode_banner}")
     logger.info(f"   Max positions : {MAX_POSITIONS}")

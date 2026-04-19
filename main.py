@@ -5,6 +5,7 @@ import os
 import sys
 import io
 import logging
+from logging.handlers import RotatingFileHandler
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -45,7 +46,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),                              # print ke terminal (UTF-8)
-        logging.FileHandler("data/bot.log", mode="a", encoding="utf-8"),  # simpan ke file (UTF-8)
+        RotatingFileHandler(                                                # rotasi otomatis, maks 5 MB × 3 backup
+            "data/bot.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        ),
     ],
 )
 logger = logging.getLogger("Main")

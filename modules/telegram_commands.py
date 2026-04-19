@@ -70,9 +70,13 @@ def _send(chat_id, text: str, reply_to: int = None):
 
 
 def _authorized(chat_id) -> bool:
-    """Hanya izinkan perintah dari chat_id yang dikonfigurasi."""
-    return str(chat_id).strip() == _CHAT_ID.lstrip('-100').lstrip('-')  or \
-           str(chat_id).strip() == _CHAT_ID
+    """Hanya izinkan perintah dari chat_id yang dikonfigurasi.
+
+    Perbandingan langsung string — mendukung user ID positif maupun
+    group ID negatif (misal -100xxxxxxxxxx) tanpa manipulasi karakter
+    yang rawan bug seperti lstrip('-100').
+    """
+    return str(chat_id).strip() == _CHAT_ID
 
 
 # ──────────────────────────────────────────────────────────────
