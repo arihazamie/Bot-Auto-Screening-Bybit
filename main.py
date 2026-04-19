@@ -233,8 +233,15 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             return None
 
         # ── 9. Quant & Derivatives ────────────────────────────────────────
+        step = "order_book"
+        try:
+            order_book = client.raw.fetch_order_book(symbol, limit=10)
+        except Exception as _ob_err:
+            logger.debug(f"[{symbol}] order book fetch failed: {_ob_err} — OBI skipped")
+            order_book = {}
+
         step = "quant"
-        df, basis, z_score, zeta_score, obi, quant_score, quant_reasons = calculate_metrics(df, ticker_info)
+        df, basis, z_score, zeta_score, obi, quant_score, quant_reasons = calculate_metrics(df, ticker_info, order_book)
 
         step = "derivatives"
         valid_deriv, deriv_score, deriv_reasons = analyze_derivatives(df, ticker_info, side)
