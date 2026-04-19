@@ -172,9 +172,9 @@ def paper_execute(trade: dict, current_price: float) -> bool:
     tp1_price_pct = _pct_price(current_price, trade['tp1'])
     tp3_price_pct = _pct_price(current_price, trade['tp3'])
 
-    sl_pnl  = _calc_pnl(side, current_price, float(trade['sl_price']), qty, lev)
-    tp1_pnl = _calc_pnl(side, current_price, float(trade['tp1']),      qty, lev)
-    tp3_pnl = _calc_pnl(side, current_price, float(trade['tp3']),      qty, lev)
+    sl_pnl  = _calc_pnl(side, current_price, float(trade['sl_price']), qty)
+    tp1_pnl = _calc_pnl(side, current_price, float(trade['tp1']),      qty)
+    tp3_pnl = _calc_pnl(side, current_price, float(trade['tp3']),      qty)
 
     sl_roi  = _roi_on_margin(sl_pnl,  margin)
     tp1_roi = _roi_on_margin(tp1_pnl, margin)

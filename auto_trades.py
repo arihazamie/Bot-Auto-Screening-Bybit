@@ -7,7 +7,6 @@ auto_trades.py — Bybit Auto Trader
 Toggle is set in config.json → "auto_trade": true/false
 """
 
-import ccxt
 import time
 import schedule
 import logging
@@ -16,6 +15,7 @@ from datetime import datetime
 from pybit.unified_trading import WebSocket
 
 from modules.config_loader import CONFIG
+from modules.exchange import BybitClient
 from modules.database import (
     init_db,
     insert_active_trade,
@@ -49,20 +49,13 @@ MODE           = "REAL" if AUTO_TRADE else "PAPER"
 
 logger = logging.getLogger("AutoTrader")
 
-# ─── Exchange (API key hanya dimuat saat REAL mode) ────────
-# Paper mode hanya butuh public endpoint (fetch_ticker, load_markets)
-# sehingga tidak perlu meng-ekspos credential ke library.
+# ─── Exchange — routing melalui BybitClient wrapper ────────
+# BybitClient menangani: API key guard, rate limit, retry,
+# connection pool, dan debug logging secara konsisten.
+# Operasi yang belum dibungkus BybitClient diakses via client.raw.
 
-_exchange_opts: dict = {'options': {'defaultType': 'swap', 'adjustForTimeDifference': True}}
-if AUTO_TRADE:
-    bybit_key    = CONFIG['api'].get('bybit_key', '')
-    bybit_secret = CONFIG['api'].get('bybit_secret', '')
-    if not bybit_key or not bybit_secret or 'YOUR_' in bybit_key:
-        raise ValueError("auto_trade=true tetapi bybit_key / bybit_secret belum diisi di config.json")
-    _exchange_opts['apiKey'] = bybit_key
-    _exchange_opts['secret'] = bybit_secret
-
-exchange = ccxt.bybit(_exchange_opts)
+client   = BybitClient(debug=False, auto_trade=AUTO_TRADE)
+_ex      = client.raw   # raw ccxt untuk order/position ops
 
 
 # ══════════════════════════════════════════════════════════
@@ -73,18 +66,18 @@ def place_split_tps(symbol: str, side: str, total_qty: float, tp1, tp2, tp3) -> 
     """Place 3 limit TP orders on Bybit (real mode only)."""
     try:
         tp_side = 'sell' if str(side).lower() in ['buy', 'long'] else 'buy'
-        q1 = float(exchange.amount_to_precision(symbol, total_qty * TP_SPLIT[0]))
-        q2 = float(exchange.amount_to_precision(symbol, total_qty * TP_SPLIT[1]))
-        q3 = float(exchange.amount_to_precision(symbol, total_qty * TP_SPLIT[2]))
+        q1 = float(_ex.amount_to_precision(symbol, total_qty * TP_SPLIT[0]))
+        q2 = float(_ex.amount_to_precision(symbol, total_qty * TP_SPLIT[1]))
+        q3 = float(_ex.amount_to_precision(symbol, total_qty * TP_SPLIT[2]))
         # Fix rounding drift
         diff = total_qty - (q1 + q2 + q3)
         if diff:
-            q3 = float(exchange.amount_to_precision(symbol, q3 + diff))
+            q3 = float(_ex.amount_to_precision(symbol, q3 + diff))
         params = {'reduceOnly': True}
         logger.info(f"⚡ Placing TPs {symbol} ({tp_side}): {q1} | {q2} | {q3}")
-        exchange.create_order(symbol, 'limit', tp_side, q1, float(tp1), params)
-        exchange.create_order(symbol, 'limit', tp_side, q2, float(tp2), params)
-        exchange.create_order(symbol, 'limit', tp_side, q3, float(tp3), params)
+        _ex.create_order(symbol, 'limit', tp_side, q1, float(tp1), params)
+        _ex.create_order(symbol, 'limit', tp_side, q2, float(tp2), params)
+        _ex.create_order(symbol, 'limit', tp_side, q3, float(tp3), params)
         return True
     except Exception as e:
         logger.error(f"TP placement failed {symbol}: {e}")
@@ -109,7 +102,7 @@ def on_execution_update(message):
             if not row:
                 continue
             logger.info(f"⚡ WS: Entry filled {symbol}. Placing split TPs…")
-            pos = exchange.fetch_position(symbol)
+            pos = _ex.fetch_position(symbol)
             size = float(pos['contracts'])
             if size > 0:
                 ok = place_split_tps(symbol, side, size, row['tp1'], row['tp2'], row['tp3'])
@@ -139,7 +132,7 @@ def on_position_update(message):
                 logger.info(f"🏁 WS: {symbol} closed. Fetching real PnL…")
                 time.sleep(1)
                 try:
-                    trades = exchange.fetch_my_trades(symbol, limit=1)
+                    trades = _ex.fetch_my_trades(symbol, limit=1)
                     pnl = float(trades[0]['info'].get('closedPnl', 0)) if trades else 0
                 except Exception:
                     pnl = 0
@@ -155,7 +148,7 @@ def on_position_update(message):
             if hit_tp1 and not sl_moved:
                 logger.info(f"♻️  WS: {symbol} hit TP1, moving SL to entry…")
                 try:
-                    exchange.set_position_stop_loss(symbol, entry, side.lower())
+                    _ex.set_position_stop_loss(symbol, entry, side.lower())
                     update_active_trade(t_id, {"is_sl_moved": True})
                 except Exception as e:
                     logger.error(f"SL move failed {symbol}: {e}")
@@ -174,11 +167,11 @@ def ingest_signals():
 
     try:
         if AUTO_TRADE:
-            balance_info = exchange.fetch_balance()
+            balance_info = client.fetch_balance()
             equity = float(balance_info['total']['USDT'])
         else:
             equity = get_paper_balance()
-            exchange.load_markets()  # needed for precision
+            client.load_markets()  # needed for precision
     except Exception as e:
         logger.error(f"Balance fetch error: {e}")
         return
@@ -198,7 +191,7 @@ def ingest_signals():
         final_lev = TARGET_LEV
         if AUTO_TRADE:
             try:
-                mkt = exchange.market(sym)
+                mkt = _ex.market(sym)
                 max_lev = float(mkt.get('limits', {}).get('leverage', {}).get('max', TARGET_LEV))
                 final_lev = min(TARGET_LEV, int(max_lev))
             except Exception:
@@ -241,7 +234,7 @@ def execute_pending():
     for trade in orders:
         sym = trade['symbol']
         try:
-            ticker = exchange.fetch_ticker(sym)
+            ticker = client.fetch_ticker(sym)
             current_price = float(ticker['last'])
         except Exception as e:
             logger.error(f"Price fetch failed {sym}: {e}")
@@ -262,7 +255,7 @@ def _real_execute(trade: dict, current_price: float):
     )
     try:
         try:
-            exchange.set_leverage(lev, sym)
+            _ex.set_leverage(lev, sym)
         except Exception:
             pass
 
@@ -270,14 +263,14 @@ def _real_execute(trade: dict, current_price: float):
                     (side == 'Short' and current_price >= entry)
         order_side = 'buy' if side == 'Long' else 'sell'
         params = {'stopLoss': sl}
-        qty_prec = float(exchange.amount_to_precision(sym, qty))
+        qty_prec = float(_ex.amount_to_precision(sym, qty))
 
         if is_better:
             logger.info(f"⚡ MARKET {sym} — price {current_price} better than {entry}")
-            res = exchange.create_order(sym, 'market', order_side, qty_prec, None, params)
+            res = _ex.create_order(sym, 'market', order_side, qty_prec, None, params)
         else:
             logger.info(f"⏳ LIMIT {sym} @ {entry} — current {current_price}")
-            res = exchange.create_order(sym, 'limit', order_side, entry, qty_prec, params)
+            res = _ex.create_order(sym, 'limit', order_side, entry, qty_prec, params)
 
         if res and 'id' in res:
             update_active_trade(oid, {"order_id": res['id'], "status": "OPEN"})
@@ -303,7 +296,7 @@ def monitor_paper_trades():
     for trade in open_trades:
         sym = trade['symbol']
         try:
-            ticker = exchange.fetch_ticker(sym)
+            ticker = client.fetch_ticker(sym)
             current_price = float(ticker['last'])
             paper_monitor(trade, current_price)
         except Exception as e:
@@ -326,16 +319,16 @@ def real_safety_check():
         try:
             order_status = None
             try:
-                order = exchange.fetch_order(oid, sym, params={'acknowledged': True})
+                order = _ex.fetch_order(oid, sym, params={'acknowledged': True})
                 order_status = order['status']
             except Exception:
-                for o in exchange.fetch_closed_orders(sym, limit=50):
+                for o in _ex.fetch_closed_orders(sym, limit=50):
                     if str(o['id']) == str(oid):
                         order_status = o['status']
                         break
 
             if order_status == 'closed':
-                pos = exchange.fetch_position(sym)
+                pos = _ex.fetch_position(sym)
                 size = float(pos['contracts'])
                 if size > 0:
                     ok = place_split_tps(sym, side, size, trade['tp1'], trade['tp2'], trade['tp3'])
