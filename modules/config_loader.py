@@ -112,6 +112,36 @@ def load_config() -> dict:
             chat_id=chat_id,
         )
 
+    # ── 5. Validasi tipe & range section risk ─────────────────────────────────
+    risk = config.get("risk", {})
+    risk_errors = []
+
+    risk_percent = risk.get("risk_percent")
+    if not isinstance(risk_percent, (int, float)) or not (0 < risk_percent <= 1):
+        risk_errors.append("  - risk.risk_percent: harus angka antara 0 (eksklusif) dan 1 (inklusif), misal 0.01 untuk 1%")
+
+    max_positions = risk.get("max_positions")
+    if not isinstance(max_positions, int) or max_positions < 1:
+        risk_errors.append("  - risk.max_positions: harus integer ≥ 1")
+
+    target_leverage = risk.get("target_leverage")
+    if not isinstance(target_leverage, int) or target_leverage < 1:
+        risk_errors.append("  - risk.target_leverage: harus integer ≥ 1")
+
+    tp_split = risk.get("tp_split", [])
+    if (not isinstance(tp_split, list) or len(tp_split) != 3
+            or not all(isinstance(x, (int, float)) for x in tp_split)
+            or abs(sum(tp_split) - 1.0) > 1e-6):
+        risk_errors.append("  - risk.tp_split: harus list 3 angka yang totalnya 1.0, misal [0.4, 0.3, 0.3]")
+
+    if risk_errors:
+        _abort(
+            f"Nilai tidak valid di '{CONFIG_PATH}':\n\n"
+            + "\n".join(risk_errors),
+            token=token,
+            chat_id=chat_id,
+        )
+
     return config
 
 

@@ -86,7 +86,7 @@ def _side_label(side: str) -> str:
 
 # ─── Core PnL Formula ─────────────────────────────────────────────────────────
 
-def _calc_pnl(side: str, entry: float, exit_price: float, qty: float, leverage: int = 1) -> float:
+def _calc_pnl(side: str, entry: float, exit_price: float, qty: float) -> float:
     """
     Hitung PnL realized dengan fee.
     qty sudah mengandung leverage, TIDAK perlu dikalikan lagi.
@@ -224,7 +224,7 @@ def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
     tg_id  = trade.get('telegram_msg_id')
 
     partial_qty    = qty * 0.30
-    partial_pnl    = _calc_pnl(side, entry, tp1, partial_qty, lev)
+    partial_pnl    = _calc_pnl(side, entry, tp1, partial_qty)
     full_margin    = _calc_margin(entry, qty, lev)
     partial_margin = full_margin * 0.30
 
@@ -278,7 +278,7 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
     tg_id  = trade.get('telegram_msg_id')
 
     partial_qty    = qty * 0.30
-    partial_pnl    = _calc_pnl(side, entry, tp2, partial_qty, lev)
+    partial_pnl    = _calc_pnl(side, entry, tp2, partial_qty)
     full_margin    = _calc_margin(entry, qty, lev)
     partial_margin = full_margin * 0.30
 
@@ -359,7 +359,7 @@ def paper_monitor(trade: dict, current_price: float):
     # ── SL Hit ──────────────────────────────────────────────────────────────
     if sl_hit:
         remaining = _remaining_qty(qty, tp1_logged, tp2_logged)
-        pnl       = _calc_pnl(side, entry, eff_sl, remaining, lev)
+        pnl       = _calc_pnl(side, entry, eff_sl, remaining)
 
         if tp2_logged:
             reason = "SL Trail (TP1 level)"
@@ -388,7 +388,7 @@ def paper_monitor(trade: dict, current_price: float):
 
         # Close sisa 40% di TP3
         remaining = _remaining_qty(qty, tp1_logged, tp2_logged)
-        pnl       = _calc_pnl(side, entry, tp3, remaining, lev)
+        pnl       = _calc_pnl(side, entry, tp3, remaining)
         _close_paper_trade(t_id, sym, side, entry, tp3, pnl, "TP3", tg_id,
                            qty=remaining, lev=lev)
         return

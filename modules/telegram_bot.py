@@ -1,8 +1,11 @@
+import logging
 import requests, json, os, pytz, pandas as pd
 import time
 from datetime import datetime
 from modules.config_loader import CONFIG
 from modules.database import insert_trade, get_trades_open, get_state, set_state
+
+logger = logging.getLogger("TelegramBot")
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,8 +53,8 @@ def normalize_chat_id(chat_id) -> str:
     if chat_id_str.startswith('-') and not chat_id_str.startswith('-100'):
         numeric_part = chat_id_str.lstrip('-')
         if len(numeric_part) >= 10:
-            print(f"⚠️  [TELEGRAM] chat_id '{chat_id_str}' kemungkinan Channel/Supergroup.")
-            print(f"⚠️  Format yang benar: '-100{numeric_part}'")
+            logger.warning(f"[TELEGRAM] chat_id '{chat_id_str}' kemungkinan Channel/Supergroup.")
+            logger.warning(f"Format yang benar: '-100{numeric_part}'")
     return chat_id_str
 
 
@@ -77,8 +80,7 @@ def _tg(method, token, _retry=5, **kwargs):
                 except Exception:
                     pass
                 wait = float(retry_after) + 0.5
-                print(f"⏳ [Telegram/{method}] Rate limit (429) — tunggu {wait:.1f}s "
-                      f"(attempt {attempt}/{_retry})")
+                logger.warning(f"[Telegram/{method}] Rate limit (429) — tunggu {wait:.1f}s (attempt {attempt}/{_retry})")
                 time.sleep(wait)
                 continue
 
@@ -86,20 +88,19 @@ def _tg(method, token, _retry=5, **kwargs):
             if not data.get("ok"):
                 desc = data.get("description", "")
                 if "not modified" not in desc.lower():
-                    print(f"❌ [Telegram/{method}] Error {data.get('error_code','?')}: {desc}")
+                    logger.error(f"[Telegram/{method}] Error {data.get('error_code','?')}: {desc}")
             return data
 
         except requests.exceptions.Timeout:
             if attempt < _retry:
                 wait = 2 * attempt
-                print(f"⏳ [Telegram/{method}] Timeout, retry {attempt}/{_retry} "
-                      f"(tunggu {wait}s)...")
+                logger.warning(f"[Telegram/{method}] Timeout, retry {attempt}/{_retry} (tunggu {wait}s)...")
                 time.sleep(wait)
             else:
-                print(f"❌ [Telegram/{method}] Timeout setelah {_retry}x retry")
+                logger.error(f"[Telegram/{method}] Timeout setelah {_retry}x retry")
                 return None
         except Exception as e:
-            print(f"❌ Telegram API Error [{method}]: {e}")
+            logger.error(f"Telegram API Error [{method}]: {e}")
             return None
 
 
@@ -113,7 +114,7 @@ def send_alert(data, auto_trade: bool = False):
     token  = CONFIG['api'].get('telegram_bot_token')
     raw_id = CONFIG['api'].get('telegram_chat_id')
     if not token or not raw_id:
-        print("❌ [send_alert] telegram_bot_token atau telegram_chat_id belum diisi!")
+        logger.error("[send_alert] telegram_bot_token atau telegram_chat_id belum diisi!")
         return None
 
     chat_id = normalize_chat_id(raw_id)
@@ -245,11 +246,11 @@ def send_alert(data, auto_trade: bool = False):
             })
             return tg_msg_id
         else:
-            print(f"❌ [send_alert] Gagal kirim. Resp: {resp}")
+            logger.error(f"[send_alert] Gagal kirim. Resp: {resp}")
             return None
 
     except Exception as e:
-        print(f"❌ Alert Error: {e}")
+        logger.error(f"Alert Error: {e}")
         return None
 
 
@@ -301,7 +302,7 @@ def update_status_dashboard():
                     dt_open = datetime.fromisoformat(str(ts_raw))
                     mins    = int((datetime.now() - dt_open.replace(tzinfo=None)).total_seconds() / 60)
                     dur     = f"{mins}m" if mins < 60 else f"{mins//60}h{mins%60:02d}m"
-                except:
+                except Exception:
                     dur = "—"
 
                 entry_str = format_price(t.get('entry_price', 0))
@@ -333,7 +334,7 @@ def update_status_dashboard():
             _send_new_dashboard(token, chat_id, content)
 
     except Exception as e:
-        print(f"❌ [update_status_dashboard] Error: {e}")
+        logger.error(f"[update_status_dashboard] Error: {e}")
 
 
 def _send_new_dashboard(token: str, chat_id: str, content: str):
@@ -375,6 +376,6 @@ def send_scan_completion(count, duration, bias, auto_trade: bool = False):
         resp = _tg('sendMessage', token,
                    json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'})
         if resp and not resp.get('ok'):
-            print(f"❌ [send_scan_completion] Gagal: {resp.get('description')}")
+            logger.error(f"[send_scan_completion] Gagal: {resp.get('description')}")
     except Exception as e:
-        print(f"❌ [send_scan_completion] Exception: {e}")
+        logger.error(f"[send_scan_completion] Exception: {e}")
