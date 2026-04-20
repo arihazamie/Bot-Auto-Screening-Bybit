@@ -7,6 +7,7 @@ Bot trading otomatis untuk Bybit yang melakukan screening sinyal, paper trading,
 ## ✨ Fitur
 
 - **Auto Screening** — scan pasar secara berkala berdasarkan watchlist
+- **Active Hour Filter** — scan hanya aktif pada jam 06:00–22:00 UTC (sesi London + New York), dapat dikonfigurasi via `system.active_hours_utc`
 - **Paper Trading** — simulasi trading tanpa modal nyata (TP, SL, breakeven otomatis)
 - **Notifikasi Telegram** — alert sinyal, fill entry, TP hit, SL hit, laporan harian
 - **Teknikal Analysis** — RSI, divergence, SMC, pattern detection, quant metrics
@@ -50,19 +51,20 @@ Salin `config.example.json` ke `config.json` lalu isi:
 cp config.example.json config.json
 ```
 
-| Key                      | Keterangan                                |
-| ------------------------ | ----------------------------------------- |
-| `api.bybit_key`          | API key Bybit                             |
-| `api.bybit_secret`       | API secret Bybit                          |
-| `api.telegram_bot_token` | Token bot Telegram                        |
-| `api.telegram_chat_id`   | Chat ID tujuan notifikasi                 |
-| `auto_trade`             | `true` = real order, `false` = paper mode |
-| `system.entry_timeframe` | Timeframe entry (default: `15m`)          |
-| `system.trend_timeframe` | Timeframe trend (default: `1h`)           |
-| `system.max_threads`     | Jumlah thread paralel saat scan           |
-| `system.watchlist_top_n` | Jumlah pair teratas di watchlist          |
-| `risk.paper_balance`     | Modal awal paper trading (USD)            |
-| `risk.risk_pct`          | Risiko per trade (%)                      |
+| Key                       | Keterangan                                                                                                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.bybit_key`           | API key Bybit                                                                                                                                                    |
+| `api.bybit_secret`        | API secret Bybit                                                                                                                                                 |
+| `api.telegram_bot_token`  | Token bot Telegram                                                                                                                                               |
+| `api.telegram_chat_id`    | Chat ID tujuan notifikasi                                                                                                                                        |
+| `auto_trade`              | `true` = real order, `false` = paper mode                                                                                                                        |
+| `system.entry_timeframe`  | Timeframe entry (default: `15m`)                                                                                                                                 |
+| `system.trend_timeframe`  | Timeframe trend (default: `1h`)                                                                                                                                  |
+| `system.max_threads`      | Jumlah thread paralel saat scan                                                                                                                                  |
+| `system.watchlist_top_n`  | Jumlah pair teratas di watchlist                                                                                                                                 |
+| `system.active_hours_utc` | Window jam aktif scan dalam UTC, format `[start, end]`. Default `[6, 22]` → 06:00–22:00 UTC (sesi London + New York). Di luar window ini scan dilewati otomatis. |
+| `risk.paper_balance`      | Modal awal paper trading (USD)                                                                                                                                   |
+| `risk.risk_pct`           | Risiko per trade (%)                                                                                                                                             |
 
 ---
 
@@ -140,22 +142,17 @@ Order yang belum terisi dalam **24 jam** otomatis di-cancel dan notifikasi dikir
 
 ## 🐛 Bug Fix Log
 
-| #   | Deskripsi                                                                                                 |
-| --- | --------------------------------------------------------------------------------------------------------- |
-| 1   | **ImportError `run_paper_update`** — fungsi dipindah ke `paper_runner.py`, import di `main.py` diperbarui |
-| 2   | **PnL calculation salah** — qty sudah mengandung leverage, tidak perlu dikali leverage lagi               |
-| 3   | **Windows UTF-8 crash** — stdout di-wrap UTF-8 agar emoji tidak error di cp1252                           |
-| 4   | **Balance tidak update saat partial** — balance diperbarui realtime di setiap TP hit                      |
-| 5   | **Remaining qty salah di TP3/SL** — sisa posisi dihitung benar setelah partial terjual                    |
-| 6   | **JSON korup saat crash** — write kini atomic (temp file + fsync + os.replace)                            |
-| 7   | **`_paused` bool tidak thread-safe** — diganti `threading.Event` (.set/.clear/.is_set)                    |
-| 8   | **pytz tidak ada di requirements.txt** — ditambahkan `pytz>=2024.1`                                       |
-
----
-
-## 📄 Lisensi
-
-MIT License — lihat file `LICENSE`.
+| #   | Deskripsi                                                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **ImportError `run_paper_update`** — fungsi dipindah ke `paper_runner.py`, import di `main.py` diperbarui                                 |
+| 2   | **PnL calculation salah** — qty sudah mengandung leverage, tidak perlu dikali leverage lagi                                               |
+| 3   | **Windows UTF-8 crash** — stdout di-wrap UTF-8 agar emoji tidak error di cp1252                                                           |
+| 4   | **Balance tidak update saat partial** — balance diperbarui realtime di setiap TP hit                                                      |
+| 5   | **Remaining qty salah di TP3/SL** — sisa posisi dihitung benar setelah partial terjual                                                    |
+| 6   | **JSON korup saat crash** — write kini atomic (temp file + fsync + os.replace)                                                            |
+| 7   | **`_paused` bool tidak thread-safe** — diganti `threading.Event` (.set/.clear/.is_set)                                                    |
+| 8   | **pytz tidak ada di requirements.txt** — ditambahkan `pytz>=2024.1`                                                                       |
+| 9   | **Scan aktif 24 jam termasuk jam sepi** — ditambahkan `is_active_hour()` filter dengan window `active_hours_utc` yang dapat dikonfigurasi |
 
 ---
 

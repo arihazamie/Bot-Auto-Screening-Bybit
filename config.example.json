@@ -15,18 +15,19 @@
     "entry_timeframe": "15m",
     "trend_timeframe": "1h",
     "min_candles_analysis": 150,
-    "watchlist_top_n": 100
+    "watchlist_top_n": 100,
+    "active_hours_utc": [6, 22]
   },
 
   "risk": {
-    "use_max_leverage": false,
+    "use_max_leverage": true,
     "target_leverage": 25,
     "risk_percent": 0.01,
-    "max_positions": 5,
-    "max_daily_loss_pct": 0.1,
+    "max_positions": 20,
+    "max_daily_loss_pct": 0.05,
     "pending_expire_hours": 6,
-    "tp_split": [0.3, 0.3, 0.4],
-    "paper_balance": 1000.0
+    "tp_split": [0.5, 0.25, 0.25],
+    "paper_balance": 100.0
   },
 
   "setup": {
@@ -44,7 +45,7 @@
     "min_smc_score": 2,
     "min_deriv_score": 2,
     "max_entry_drift_pct": 0.03,
-    "risk_reward_min": 3.0
+    "risk_reward_min": 2.5
   },
 
   "indicators": {

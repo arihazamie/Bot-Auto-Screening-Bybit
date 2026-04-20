@@ -5,6 +5,7 @@ import os
 import sys
 import io
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 import pandas as pd
 import pandas_ta as ta
@@ -379,10 +380,33 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
 # ─────────────────────────────────────────────────────────────────────────────
 # scan
 # ─────────────────────────────────────────────────────────────────────────────
+def is_active_hour() -> bool:
+    """
+    Kembalikan True jika jam UTC saat ini berada dalam window aktif.
+    Window dikonfigurasi via system.active_hours_utc: [start, end] (inklusif start, eksklusif end).
+    Default: [6, 22] → 06:00–22:00 UTC (sesi London + New York).
+    """
+    window   = CONFIG["system"].get("active_hours_utc", [6, 22])
+    start_h  = int(window[0])
+    end_h    = int(window[1])
+    current_h = datetime.utcnow().hour
+    return start_h <= current_h < end_h
+
+
 def scan():
     # ✅ Cek pause flag dari Telegram /pause command
     if is_paused():
         logger.info("⏸ Scan dilewati — bot sedang di-pause via Telegram (/resume untuk lanjutkan)")
+        return
+
+    # ✅ Cek active hour window (default 06:00–22:00 UTC)
+    if not is_active_hour():
+        window = CONFIG["system"].get("active_hours_utc", [6, 22])
+        logger.info(
+            f"🌙 Scan dilewati — di luar jam aktif "
+            f"(sekarang {datetime.utcnow().strftime('%H:%M')} UTC, "
+            f"aktif {window[0]:02d}:00–{window[1]:02d}:00 UTC)"
+        )
         return
 
     start_time = time.time()
