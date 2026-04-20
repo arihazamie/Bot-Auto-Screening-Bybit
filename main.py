@@ -108,22 +108,31 @@ def get_btc_bias() -> str:
 
 
 def get_symbol_trend(symbol: str) -> str:
-    """Per-symbol trend pada TREND_TF menggunakan EMA 13/21."""
+    """Per-symbol trend pada TREND_TF menggunakan Supertrend (ATR period=10, multiplier=3.5)."""
     try:
         df = client.fetch_ohlcv(symbol, TREND_TF, limit=100)
         if df is None or len(df) < 50:
             return "Sideways"
 
-        df["ema13"] = ta.ema(df["close"], length=13)
-        df["ema21"] = ta.ema(df["close"], length=21)
-        curr = df.iloc[-1]
+        st = ta.supertrend(df["high"], df["low"], df["close"],
+                           length=10, multiplier=3.5)
 
-        if pd.isna(curr["ema13"]) or pd.isna(curr["ema21"]):
+        if st is None or st.empty:
             return "Sideways"
 
-        if curr["ema13"] > curr["ema21"]:
+        # Kolom direction: SUPERTd_10_3.5 → nilai 1 = Bullish, -1 = Bearish
+        direction_col = [c for c in st.columns if c.startswith("SUPERTd")]
+        if not direction_col:
+            return "Sideways"
+
+        direction = st[direction_col[0]].iloc[-1]
+
+        if pd.isna(direction):
+            return "Sideways"
+
+        if direction == 1:
             return "Bullish"
-        elif curr["ema13"] < curr["ema21"]:
+        elif direction == -1:
             return "Bearish"
         return "Sideways"
 
