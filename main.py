@@ -31,6 +31,9 @@ from modules.database import (
     get_trades_today,
     get_paper_balance,
     purge_old_data,
+    get_candle_confirm_state,
+    set_candle_confirm_state,
+    delete_candle_confirm_state,
 )
 from modules.technicals import get_technicals, detect_divergence
 from modules.quant import calculate_metrics, check_fakeout
@@ -235,6 +238,19 @@ MIN_SL_PCT = float(STRATEGY_CFG.get("min_sl_pct", 0.005))  # default 0.5%
 # Config: set "mtf_confluence_enabled": false di bagian "strategy" untuk disable.
 MTF_CONFLUENCE_ENABLED = bool(STRATEGY_CFG.get("mtf_confluence_enabled", True))
 
+# ─── FIX #05: Correlation Filter antar Posisi ─────────────────────────────────
+# Tolak signal jika sudah ada posisi aktif dengan korelasi return ≥ threshold.
+# Mencegah simultan Long BTC + ETH + BNB yang semua correlated >0.85 — satu event
+# BTC dump bisa kena SL 3 posisi sekaligus = 3× risk dalam satu kejadian.
+#
+# Config (bagian "strategy" di config.json):
+#   "correlation_filter_enabled": true   ← toggle on/off
+#   "correlation_threshold":      0.85   ← koefisien Pearson, 0.85 = sangat correlated
+#   "correlation_lookback":       50     ← jumlah candle untuk hitung korelasi
+CORRELATION_ENABLED   = bool(STRATEGY_CFG.get("correlation_filter_enabled", True))
+CORRELATION_THRESHOLD = float(STRATEGY_CFG.get("correlation_threshold", 0.85))
+CORRELATION_LOOKBACK  = int(STRATEGY_CFG.get("correlation_lookback", 50))
+
 # ─── FIX #5: Candle Confirmation ──────────────────────────────────────────────
 # Tunggu satu candle close setelah pattern terbentuk sebelum entry.
 # Mengurangi false signal ~15–25% karena entry hanya terjadi ketika pattern
@@ -248,20 +264,30 @@ CANDLE_CONFIRM_ENABLED  = bool(STRATEGY_CFG.get("candle_confirmation", True))
 # Meningkatkan R:R per trade, mengurangi fill rate ~20–30% pada market volatile.
 LIMIT_ORDER_OFFSET_PCT  = float(STRATEGY_CFG.get("limit_order_offset_pct", 0.002))
 
-# State tracker per-symbol untuk candle confirmation (in-memory, reset on restart)
-# Key: (symbol, pattern, side) → last bar timestamp (int ms)
-_candle_confirm_state: dict = {}
+# ─── FIX #07: Candle Confirm State — DB-backed ────────────────────────────────
+# State tracker per-symbol untuk candle confirmation.
+# SEBELUMNYA: in-memory dict → hilang setiap restart bot.
+# SEKARANG  : disimpan ke DB (state_store) → survive restart.
+#
+# Key format : "candle_confirm:{symbol}:{pattern}:{side}"
+# Value      : JSON {"bar_ts": <int ms>, "saved_at": <float unix>}
+#
+# Cleanup    : purge_candle_confirm_state(max_age_hours=4) dipanggil
+#              otomatis oleh purge_old_data() setiap jam 03:00.
 
 
 def _check_candle_confirmation(symbol: str, pattern: str, side: str, df: pd.DataFrame) -> bool:
     """
-    FIX #5 — Candle Confirmation Gate.
+    FIX #5 + FIX #07 — Candle Confirmation Gate (DB-backed).
 
     Memastikan satu candle penuh telah CLOSE setelah pattern terbentuk sebelum
-    sinyal dikirim. Cara kerja:
-      - Scan pertama  : pattern terdeteksi → state disimpan, return False (tunggu)
-      - Scan berikutnya: bar timestamp baru → pattern terkonfirmasi, return True
-      - Jika pattern hilang / side berubah → state di-reset, mulai dari awal
+    sinyal dikirim. State disimpan ke SQLite sehingga restart bot tidak mereset
+    semua antrian konfirmasi.
+
+    Cara kerja:
+      - Scan pertama  : pattern terdeteksi → state disimpan ke DB, return False (tunggu)
+      - Scan berikutnya: bar timestamp baru → pattern terkonfirmasi, state dihapus dari DB
+      - Jika pattern hilang / side berubah  → state di-reset saat pattern terdeteksi lagi
 
     Returns True jika pattern sudah terkonfirmasi candle close, False jika masih menunggu.
     Selalu True jika CANDLE_CONFIRM_ENABLED = False.
@@ -269,24 +295,21 @@ def _check_candle_confirmation(symbol: str, pattern: str, side: str, df: pd.Data
     if not CANDLE_CONFIRM_ENABLED:
         return True
 
-    # Ambil timestamp bar terakhir (int ms) — df.index bisa DatetimeIndex atau RangeIndex
+    # Ambil timestamp bar terakhir (int ms)
     try:
         idx = df.index[-1]
-        if hasattr(idx, "timestamp"):
-            last_bar_ts = int(idx.timestamp() * 1000)
-        else:
-            last_bar_ts = int(idx)
+        last_bar_ts = int(idx.timestamp() * 1000) if hasattr(idx, "timestamp") else int(idx)
     except Exception:
         return True  # Tidak bisa tentukan timestamp → loloskan
 
-    key = (symbol, pattern, side)
-    prev_ts = _candle_confirm_state.get(key)
+    db_key  = f"candle_confirm:{symbol}:{pattern}:{side}"
+    prev_ts = get_candle_confirm_state(db_key)
 
     if prev_ts is None:
-        # Pertama kali pattern ini terdeteksi — simpan dan tunggu
-        _candle_confirm_state[key] = last_bar_ts
+        # Pertama kali pattern ini terdeteksi — simpan ke DB dan tunggu candle berikutnya
+        set_candle_confirm_state(db_key, last_bar_ts)
         logger.debug(
-            f"[{symbol}] ⏳ Candle confirm: {pattern} {side} terdaftar, "
+            f"[{symbol}] ⏳ Candle confirm: {pattern} {side} terdaftar ke DB, "
             f"menunggu candle berikutnya (ts={last_bar_ts})"
         )
         return False
@@ -296,8 +319,8 @@ def _check_candle_confirmation(symbol: str, pattern: str, side: str, df: pd.Data
         logger.debug(f"[{symbol}] ⏳ Candle confirm: masih candle sama (ts={last_bar_ts})")
         return False
 
-    # Bar baru sudah close → pattern terkonfirmasi
-    del _candle_confirm_state[key]
+    # Bar baru sudah close → pattern terkonfirmasi → hapus state dari DB
+    delete_candle_confirm_state(db_key)
     logger.debug(
         f"[{symbol}] ✅ Candle confirm: {pattern} {side} terkonfirmasi "
         f"(prev_ts={prev_ts} → new_ts={last_bar_ts})"
@@ -720,6 +743,76 @@ def _step_build_trade_setup(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX #05: Correlation Filter antar Posisi
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _step_correlation_filter(
+    symbol: str,
+    df: pd.DataFrame,
+    active_signals: set,
+    counters: dict,
+) -> "str | None":
+    """
+    FIX #05 — Correlation Filter.
+
+    Tolak signal jika sudah ada posisi aktif dengan korelasi return ≥
+    CORRELATION_THRESHOLD. Mencegah 3 posisi Long bersamaan di BTC, ETH, BNB
+    yang semuanya correlated >0.85 — satu event BTC dump kena SL 3 posisi = 3×
+    risk dari satu kejadian.
+
+    Algoritma:
+      1. Hitung return series kandidat (pct_change) dari OHLCV yang sudah diambil
+      2. Untuk tiap symbol di active_signals, fetch OHLCV lalu hitung korelasi Pearson
+      3. Jika |corr| ≥ CORRELATION_THRESHOLD → reject
+
+    Returns reject-reason string jika harus skip, None jika lolos.
+    """
+    if not CORRELATION_ENABLED or not active_signals:
+        return None
+
+    active_syms = [s for s, _ in active_signals if s != symbol]
+    if not active_syms:
+        return None
+
+    returns_cand = df["close"].pct_change().dropna().iloc[-CORRELATION_LOOKBACK:]
+    if len(returns_cand) < 20:
+        return None   # data terlalu pendek untuk korelasi yang bermakna
+
+    for active_sym in active_syms[:10]:    # batasi maks 10 cek agar tidak lambat
+        try:
+            df_active = client.fetch_ohlcv(
+                active_sym, ENTRY_TF, limit=CORRELATION_LOOKBACK + 10
+            )
+            if df_active is None or len(df_active) < 20:
+                continue
+
+            returns_active = df_active["close"].pct_change().dropna().iloc[-CORRELATION_LOOKBACK:]
+            min_len = min(len(returns_cand), len(returns_active))
+            if min_len < 20:
+                continue
+
+            corr_matrix = np.corrcoef(
+                returns_cand.values[-min_len:],
+                returns_active.values[-min_len:]
+            )
+            corr = float(corr_matrix[0, 1])
+
+            if abs(corr) >= CORRELATION_THRESHOLD:
+                counters["correlation_reject"] += 1
+                base_name = active_sym.split("/")[0]
+                logger.debug(
+                    f"[{symbol}] skip — correlation={corr:.2f} with {active_sym} "
+                    f"(threshold={CORRELATION_THRESHOLD}) — portfolio terlalu correlated"
+                )
+                return f"corr_with_{base_name}"
+
+        except Exception as e:
+            logger.debug(f"[{symbol}] correlation check error with {active_sym}: {e}")
+
+    return None   # lolos semua check — diversified enough
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # analyze_ticker — orkestrator (setelah FIX #3 refactor)
 # ─────────────────────────────────────────────────────────────────────────────
 def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: dict):
@@ -766,6 +859,12 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             symbol, side, counters
         )
         if confluence_reject:
+            return None
+
+        # FIX #05 — Correlation Filter: tolak jika portfolio sudah terlalu correlated
+        step = "correlation_filter"
+        corr_reject = _step_correlation_filter(symbol, df, active_signals, counters)
+        if corr_reject:
             return None
 
         # FIX #5 — Candle Confirmation: pastikan pattern sudah close 1 candle penuh
@@ -975,6 +1074,7 @@ def scan():
             "mtf_conflict":        "MTF conflict — Supertrend (1h vs 15m)",
             "mtf_confluence_fail": f"MTF confluence fail — pattern {TREND_TF} berlawanan (FIX #08)",
             "btc_filter":          "BTC bias conflict",
+            "correlation_reject":  f"Correlation filter — correlated >={CORRELATION_THRESHOLD:.0%} dengan posisi aktif (FIX #05)",
             "smc_fail":            "SMC fail",
             "deriv_fail":          "Derivatives fail",
             "low_rvol":            f"RVOL rendah (< {CONFIG['indicators']['min_rvol']}x)",

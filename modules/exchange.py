@@ -166,11 +166,13 @@ class BybitClient:
         self._leverage_ttl   = 6 * 3600   # 6 jam dalam detik
 
         # Cache OHLCV per (symbol, timeframe) — mengurangi API call saat scan
-        # TTL = 13 menit (lebih pendek dari interval scan 15 menit agar data tidak basi)
+        # FIX #06: TTL dihitung DINAMIS per timeframe (75% dari durasi 1 candle)
+        #   • 15m → TTL ≈ 11 menit   • 1h  → TTL ≈ 45 menit
+        #   • 4h  → TTL ≈ 3 jam      • 1d  → TTL ≈ 18 jam
+        # Ini menjamin pattern detection selalu menggunakan data candle terbaru.
         # Struktur: { (symbol, timeframe): (DataFrame, fetched_at: float) }
         self._ohlcv_cache: dict[tuple, tuple] = {}
         self._ohlcv_lock  = threading.Lock()
-        self._ohlcv_ttl   = 13 * 60   # 13 menit dalam detik
 
     # ─────────────────────────────────────────────
     # Symbol normalization
@@ -282,6 +284,37 @@ class BybitClient:
         return ok
 
     # ─────────────────────────────────────────────
+    # FIX #06: Dynamic OHLCV Cache TTL
+    # ─────────────────────────────────────────────
+
+    # Durasi satu candle dalam detik untuk setiap timeframe
+    _TF_SECONDS: dict[str, int] = {
+        "1m":  60,    "3m":  180,   "5m":  300,
+        "15m": 900,   "30m": 1800,  "1h":  3600,
+        "2h":  7200,  "4h":  14400, "6h":  21600,
+        "12h": 43200, "1d":  86400, "1w":  604800,
+    }
+    # Cache-expiry factor: 0.75 → cache kadaluarsa di 75% jalan candle berikutnya
+    # Cukup fresh untuk menghindari stale pattern, tapi hemat API call.
+    _TTL_FACTOR: float = 0.75
+
+    def _get_ohlcv_ttl(self, timeframe: str) -> float:
+        """
+        FIX #06 — Hitung TTL cache OHLCV secara dinamis berdasarkan timeframe.
+
+        Rumus: TTL = durasi_candle × _TTL_FACTOR
+
+        Contoh:
+          15m →  900 × 0.75 = 675 detik  (≈11 menit)
+          1h  → 3600 × 0.75 = 2700 detik (≈45 menit)
+          4h  → 14400 × 0.75 = 10800 detik (≈3 jam)
+
+        Unknown timeframe → fallback 900 × 0.75 = 675 detik (konservatif).
+        """
+        candle_sec = self._TF_SECONDS.get(timeframe, 900)
+        return candle_sec * self._TTL_FACTOR
+
+    # ─────────────────────────────────────────────
     # fetch_ohlcv
     # ─────────────────────────────────────────────
     @_with_retry(max_retries=3, base_delay=1.0)
@@ -303,12 +336,17 @@ class BybitClient:
         cache_key = (sym, timeframe)
         now       = time.time()
 
-        # ── Cache read (fast path) ─────────────────────────────────────────
+        # ── Cache read (fast path) — TTL dinamis per timeframe (FIX #06) ─────
+        ttl    = self._get_ohlcv_ttl(timeframe)
         cached = self._ohlcv_cache.get(cache_key)
         if cached is not None:
             df_cached, fetched_at = cached
-            if now - fetched_at < self._ohlcv_ttl:
-                logger.debug(f"fetch_ohlcv [{sym}/{timeframe}] — cache HIT ({(now - fetched_at):.0f}s old)")
+            age = now - fetched_at
+            if age < ttl:
+                logger.debug(
+                    f"fetch_ohlcv [{sym}/{timeframe}] — cache HIT "
+                    f"({age:.0f}s old, TTL={ttl:.0f}s)"
+                )
                 return df_cached.copy()
 
         # ── Cache miss: fetch dari Bybit ───────────────────────────────────

@@ -901,7 +901,7 @@
         <div class="hero-meta">
           <div class="hm"><b>25 files</b> · ~3,300 LOC</div>
           <div class="hm"><b>13 modules</b> analyzed</div>
-          <div class="hm hm-g"><b>18 fixes</b> already done</div>
+          <div class="hm hm-g"><b>22 fixes</b> already done</div>
           <div class="hm"><b>22 improvements</b> proposed</div>
           <div class="hm"><b>Python 3.10+</b> · CCXT · SQLite · Telegram</div>
         </div>
@@ -1572,7 +1572,7 @@
                 <div class="fbody">
                   <p>
                     <strong>Short gate: tidak ada.</strong> Funding sangat
-                    negatif (-0.05%) = Short mahal tapi tidak di-filter.
+                    negatif (-0.05%) = Short mahal → ✅ Kini di-filter oleh FIX #04 (MIN_FUNDING_SHORT).
                   </p>
                 </div>
               </div>
@@ -1644,7 +1644,7 @@
           <div class="fitem f-warn">
             <div class="ficon">⚠️</div>
             <div class="fbody">
-              <h4>No Correlation Filter</h4>
+              <h4>Correlation Filter <span class="badge b-done" style="font-size:0.7rem">✅ FIX #05</span></h4>
               <p>
                 Bot bisa hold BTC Long + ETH Long + BNB Long secara bersamaan.
                 Correlation ketiga coin > 0.85 — ketika BTC dump, semua SL hit
@@ -2138,7 +2138,7 @@
             </div>
             <div class="card-body">
               Saat bot restart: <strong>(1)</strong>
-              <code>_candle_confirm_state</code> hilang — semua pending pattern
+              <code>_candle_confirm_state</code> ✅ kini persisted ke SQLite (FIX #07) — restart
               kembali ke scan pertama. <strong>(2)</strong> Active PENDING
               trades di DB tetap ada tapi candle state context hilang.
               <strong>(3)</strong> Tidak ada notifikasi ke Telegram bahwa bot
@@ -2378,9 +2378,9 @@
           <div class="impr-head">
             <div class="impr-num">04</div>
             <div class="impr-title">
-              Tambahkan Funding Rate Gate untuk Short
+              <s>Tambahkan Funding Rate Gate untuk Short</s>
             </div>
-            <span class="badge b-warn">PENTING</span>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
@@ -2391,19 +2391,21 @@
               margin.
             </p>
             <div class="cb">
-              <span class="cm"># derivatives.py — tambahkan guard Short:</span>
-              <span class="kw">if</span> side ==
-              <span class="st">"Short"</span>
-              <span class="kw">and</span> funding < -<span class="nu">0.02</span
-              >: <span class="kw">return</span> False,
-              <span class="nu">0</span>, [<span class="st"
-                >"Funding Hot Short (&lt;-0.02%) — Short mahal"</span
-              >]
+              <span class="cm"># derivatives.py — FIX #04 IMPLEMENTED ✅</span>
+              <span class="cm"># Guard simetris Long &amp; Short:</span>
+              MAX_FUNDING_LONG  = STRATEGY_CFG.get(<span class="st">"max_funding_long"</span>,   <span class="nu">0.02</span>)
+              MIN_FUNDING_SHORT = STRATEGY_CFG.get(<span class="st">"min_funding_short"</span>, -<span class="nu">0.02</span>)
 
-              <span class="cm"># Atau configurable:</span>
-              MIN_FUNDING_SHORT = STRATEGY_CFG.get(<span class="st"
-                >"min_funding_for_short"</span
-              >, -<span class="nu">0.02</span>)
+              <span class="kw">if</span> side == <span class="st">"Long"</span>  <span class="kw">and</span> funding &gt;  MAX_FUNDING_LONG:
+                  <span class="kw">return</span> False, <span class="nu">0</span>, [<span class="st">"Funding Hot Long — carry mahal"</span>]
+              <span class="kw">if</span> side == <span class="st">"Short"</span> <span class="kw">and</span> funding &lt; MIN_FUNDING_SHORT:
+                  <span class="kw">return</span> False, <span class="nu">0</span>, [<span class="st">"Funding Hot Short — carry mahal"</span>]
+
+              <span class="cm"># Bonus: funding memihak arah posisi</span>
+              <span class="kw">elif</span> side == <span class="st">"Short"</span> <span class="kw">and</span> funding &gt; BONUS_FUNDING_MIN:
+                  score += <span class="nu">1</span>; reasons.append(<span class="st">"Funding Favors Short"</span>)
+              <span class="kw">elif</span> side == <span class="st">"Long"</span>  <span class="kw">and</span> funding &lt; -BONUS_FUNDING_MIN:
+                  score += <span class="nu">1</span>; reasons.append(<span class="st">"Funding Favors Long"</span>)
             </div>
             <div class="impact">
               <div class="impact-head">▸ Jika Diimplementasikan</div>
@@ -2440,8 +2442,8 @@
         <div class="impr">
           <div class="impr-head">
             <div class="impr-num">05</div>
-            <div class="impr-title">Correlation Filter Antar Posisi</div>
-            <span class="badge b-warn">PENTING</span>
+            <div class="impr-title"><s>Correlation Filter Antar Posisi</s></div>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
@@ -2451,33 +2453,18 @@
               event.
             </p>
             <div class="cb">
-              <span class="cm"
-                ># main.py — sebelum save_signal_to_db, tambahkan cek
-                korelasi:</span
-              >
-              <span class="kw">def</span>
-              <span class="fn">is_correlated_to_active</span>(symbol: str, side:
-              str) -> bool:
-              <span class="st"
-                >"""Return True jika sudah ada posisi dengan side sama di
-                high-correlation pair."""</span
-              >
-              HIGH_CORR_GROUPS = [ {<span class="st">"BTC/USDT:USDT"</span>,
-              <span class="st">"ETH/USDT:USDT"</span>},
-              <span class="cm"># BTC-ETH selalu highly correlated</span>
-              ] active = get_active_signals()
-              <span class="kw">for</span> group
-              <span class="kw">in</span> HIGH_CORR_GROUPS:
-              <span class="kw">if</span> symbol
-              <span class="kw">in</span> group:
-              <span class="kw">for</span> (active_sym, tf)
-              <span class="kw">in</span> active:
-              <span class="kw">if</span> active_sym
-              <span class="kw">in</span> group
-              <span class="kw">and</span> active_sym != symbol:
-              <span class="kw">return</span> True
-              <span class="cm"># Already have correlated position</span>
-              <span class="kw">return</span> False
+              <span class="cm"># main.py — FIX #05 IMPLEMENTED ✅ (dynamic Pearson correlation)</span>
+              CORRELATION_THRESHOLD = STRATEGY_CFG.get(<span class="st">"correlation_threshold"</span>, <span class="nu">0.85</span>)
+              CORRELATION_LOOKBACK  = STRATEGY_CFG.get(<span class="st">"correlation_lookback"</span>,  <span class="nu">50</span>)
+
+              <span class="kw">def</span> <span class="fn">_step_correlation_filter</span>(symbol, df, active_signals, counters):
+                  returns_cand = df[<span class="st">"close"</span>].pct_change().dropna().iloc[-CORRELATION_LOOKBACK:]
+                  <span class="kw">for</span> active_sym <span class="kw">in</span> [s <span class="kw">for</span> s,_ <span class="kw">in</span> active_signals <span class="kw">if</span> s != symbol]:
+                      df_a = client.fetch_ohlcv(active_sym, ENTRY_TF, limit=<span class="nu">60</span>)
+                      corr = np.corrcoef(returns_cand[-<span class="nu">50</span>:], df_a[<span class="st">"close"</span>].pct_change().dropna()[-<span class="nu">50</span>:])[<span class="nu">0</span>,<span class="nu">1</span>]
+                      <span class="kw">if</span> abs(corr) &gt;= CORRELATION_THRESHOLD:
+                          <span class="kw">return</span> <span class="st">f"corr_with_{active_sym}"</span>  <span class="cm"># reject</span>
+                  <span class="kw">return</span> None  <span class="cm"># lolos — diversified</span>
             </div>
             <div class="impact">
               <div class="impact-head">▸ Jika Diimplementasikan</div>
@@ -2513,9 +2500,9 @@
           <div class="impr-head">
             <div class="impr-num">06</div>
             <div class="impr-title">
-              OHLCV Cache TTL Dinamis Berdasarkan Timeframe
+              <s>OHLCV Cache TTL Dinamis Berdasarkan Timeframe</s>
             </div>
-            <span class="badge b-warn">PENTING</span>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
@@ -2525,21 +2512,17 @@
               candle lama yang sudah berubah.
             </p>
             <div class="cb">
-              <span class="cm"
-                ># exchange.py — dalam BybitClient.fetch_ohlcv():</span
-              >
-              TF_SECONDS = {
-              <span class="st">'1m'</span>: <span class="nu">60</span>,
-              <span class="st">'3m'</span>: <span class="nu">180</span>,
-              <span class="st">'5m'</span>: <span class="nu">300</span>,
-              <span class="st">'15m'</span>: <span class="nu">900</span>,
-              <span class="st">'30m'</span>: <span class="nu">1800</span>,
-              <span class="st">'1h'</span>: <span class="nu">3600</span>,
-              <span class="st">'4h'</span>: <span class="nu">14400</span>,
-              <span class="st">'1d'</span>: <span class="nu">86400</span> } ttl
-              = TF_SECONDS.get(timeframe, <span class="nu">900</span>) *
-              <span class="nu">0.75</span>
-              <span class="cm"># expire 75% into candle</span>
+              <span class="cm"># exchange.py — FIX #06 IMPLEMENTED ✅</span>
+              _TF_SECONDS = {
+                  <span class="st">'1m'</span>:<span class="nu">60</span>, <span class="st">'3m'</span>:<span class="nu">180</span>, <span class="st">'5m'</span>:<span class="nu">300</span>, <span class="st">'15m'</span>:<span class="nu">900</span>,
+                  <span class="st">'30m'</span>:<span class="nu">1800</span>, <span class="st">'1h'</span>:<span class="nu">3600</span>, <span class="st">'2h'</span>:<span class="nu">7200</span>,
+                  <span class="st">'4h'</span>:<span class="nu">14400</span>, <span class="st">'6h'</span>:<span class="nu">21600</span>, <span class="st">'1d'</span>:<span class="nu">86400</span>
+              }
+              _TTL_FACTOR = <span class="nu">0.75</span>
+
+              <span class="kw">def</span> <span class="fn">_get_ohlcv_ttl</span>(self, timeframe):
+                  <span class="cm"># 15m → 675s ≈11m | 1h → 2700s ≈45m | 4h → 10800s ≈3h</span>
+                  <span class="kw">return</span> self._TF_SECONDS.get(timeframe, <span class="nu">900</span>) * self._TTL_FACTOR
             </div>
             <div class="impact">
               <div class="impact-head">▸ Jika Diimplementasikan</div>
@@ -2572,9 +2555,9 @@
           <div class="impr-head">
             <div class="impr-num">07</div>
             <div class="impr-title">
-              Persist Candle Confirm State ke Database
+              <s>Persist Candle Confirm State ke Database</s>
             </div>
-            <span class="badge b-warn">PENTING</span>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
@@ -2585,23 +2568,22 @@
               di queue.
             </p>
             <div class="cb">
-              <span class="cm"
-                ># database.py — gunakan state_store yang sudah ada:</span
-              >
-              <span class="kw">from</span> modules.database
-              <span class="kw">import</span> set_state, get_state
+              <span class="cm"># database.py + main.py — FIX #07 IMPLEMENTED ✅</span>
+              <span class="cm"># database.py — 4 fungsi baru:</span>
+              <span class="kw">def</span> <span class="fn">get_candle_confirm_state</span>(key) -&gt; int | None: ...
+              <span class="kw">def</span> <span class="fn">set_candle_confirm_state</span>(key, bar_ts): ...
+              <span class="kw">def</span> <span class="fn">delete_candle_confirm_state</span>(key): ...
+              <span class="kw">def</span> <span class="fn">purge_candle_confirm_state</span>(max_age_hours=<span class="nu">4.0</span>) -&gt; int: ...
 
-              <span class="cm"># Save saat pattern pertama terdeteksi:</span>
-              key = f<span class="st"
-                >"candle_confirm:{symbol}:{pattern}:{side}"</span
-              >
-              set_state(key, str(last_bar_ts))
-
-              <span class="cm"># Load saat check:</span>
-              stored = get_state(key) prev_ts =
-              <span class="fn">int</span>(stored)
-              <span class="kw">if</span> stored
-              <span class="kw">else</span> None
+              <span class="cm"># main.py — _check_candle_confirmation() kini DB-backed:</span>
+              db_key  = <span class="st">f"candle_confirm:{symbol}:{pattern}:{side}"</span>
+              prev_ts = get_candle_confirm_state(db_key)   <span class="cm"># baca dari SQLite</span>
+              <span class="kw">if</span> prev_ts <span class="kw">is</span> None:
+                  set_candle_confirm_state(db_key, last_bar_ts)  <span class="cm"># persist</span>
+                  <span class="kw">return</span> False
+              <span class="kw">if</span> last_bar_ts &lt;= prev_ts: <span class="kw">return</span> False
+              delete_candle_confirm_state(db_key)           <span class="cm"># confirmed → cleanup</span>
+              <span class="kw">return</span> True
             </div>
             <div class="impact">
               <div class="impact-head">▸ Jika Diimplementasikan</div>
@@ -3657,36 +3639,36 @@
               <td><s>Operational awareness</s></td>
               <td><code>main.py</code></td>
             </tr>
-            <tr>
-              <td>04</td>
-              <td>Funding Rate Gate untuk Short</td>
-              <td><span class="badge b-warn">PENTING</span></td>
-              <td>30 menit</td>
-              <td>Kurangi carry cost</td>
+            <tr class="done-row">
+              <td><s>04</s></td>
+              <td><s>Funding Rate Gate untuk Short</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>30 menit</s></td>
+              <td><s>Kurangi carry cost</s></td>
               <td><code>derivatives.py</code></td>
             </tr>
-            <tr>
-              <td>05</td>
-              <td>Correlation Filter antar posisi</td>
-              <td><span class="badge b-warn">PENTING</span></td>
-              <td>2 jam</td>
-              <td>Portfolio diversifikasi</td>
+            <tr class="done-row">
+              <td><s>05</s></td>
+              <td><s>Correlation Filter antar posisi</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>2 jam</s></td>
+              <td><s>Portfolio diversifikasi</s></td>
               <td><code>main.py</code></td>
             </tr>
-            <tr>
-              <td>06</td>
-              <td>OHLCV Cache TTL Dinamis</td>
-              <td><span class="badge b-warn">PENTING</span></td>
-              <td>1 jam</td>
-              <td>Fresh data guarantee</td>
+            <tr class="done-row">
+              <td><s>06</s></td>
+              <td><s>OHLCV Cache TTL Dinamis</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>1 jam</s></td>
+              <td><s>Fresh data guarantee</s></td>
               <td><code>exchange.py</code></td>
             </tr>
-            <tr>
-              <td>07</td>
-              <td>Persist Candle Confirm ke DB</td>
-              <td><span class="badge b-warn">PENTING</span></td>
-              <td>2 jam</td>
-              <td>Restart resilience</td>
+            <tr class="done-row">
+              <td><s>07</s></td>
+              <td><s>Persist Candle Confirm ke DB</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>2 jam</s></td>
+              <td><s>Restart resilience</s></td>
               <td><code>main.py, database.py</code></td>
             </tr>
             <tr>

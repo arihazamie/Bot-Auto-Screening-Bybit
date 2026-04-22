@@ -429,6 +429,81 @@ def set_state(key: str, value: str):
     c.commit()
 
 
+# ─── Candle Confirm State (FIX #07) ────────────────────────────────────────────
+# Menyimpan pending candle confirmation ke DB agar tidak hilang saat bot restart.
+# Format key  : "candle_confirm:{symbol}:{pattern}:{side}"
+# Format value: JSON {"bar_ts": <int ms>, "saved_at": <float unix>}
+
+def get_candle_confirm_state(key: str) -> "int | None":
+    """
+    Return bar_ts (int ms) yang tersimpan untuk key konfirmasi candle,
+    atau None jika belum ada.
+    """
+    row = _conn().execute(
+        "SELECT value FROM state_store WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        data = json.loads(row["value"])
+        return int(data["bar_ts"])
+    except Exception:
+        return None
+
+
+def set_candle_confirm_state(key: str, bar_ts: int) -> None:
+    """Simpan (atau update) pending candle confirmation ke DB."""
+    import time as _time
+    payload = json.dumps({"bar_ts": bar_ts, "saved_at": _time.time()})
+    set_state(key, payload)
+
+
+def delete_candle_confirm_state(key: str) -> None:
+    """Hapus satu entry candle confirmation (dipanggil setelah pattern terkonfirmasi)."""
+    c = _conn()
+    c.execute("DELETE FROM state_store WHERE key = ?", (key,))
+    c.commit()
+
+
+def purge_candle_confirm_state(max_age_hours: float = 4.0) -> int:
+    """
+    Hapus semua entri candle confirmation yang tersimpan lebih lama dari
+    `max_age_hours` jam. Mencegah akumulasi state lama dari pattern yang
+    tidak pernah muncul lagi.
+
+    Dipanggil otomatis oleh purge_old_data() (via scheduler di main.py).
+
+    Return: jumlah baris yang dihapus.
+    """
+    import time as _time
+    cutoff_ts = _time.time() - (max_age_hours * 3600)
+
+    # Ambil semua kunci candle_confirm lalu filter berdasarkan saved_at
+    rows = _conn().execute(
+        "SELECT key, value FROM state_store WHERE key LIKE 'candle_confirm:%'"
+    ).fetchall()
+
+    stale_keys = []
+    for row in rows:
+        try:
+            data = json.loads(row["value"])
+            if float(data.get("saved_at", 0)) < cutoff_ts:
+                stale_keys.append(row["key"])
+        except Exception:
+            stale_keys.append(row["key"])   # JSON rusak → hapus juga
+
+    if not stale_keys:
+        return 0
+
+    c = _conn()
+    c.executemany(
+        "DELETE FROM state_store WHERE key = ?",
+        [(k,) for k in stale_keys]
+    )
+    c.commit()
+    return len(stale_keys)
+
+
 # ─── Signal Queue helper (used by main.py / auto_trades.py) ───────────────────
 
 # ─── Data Cleanup / TTL ────────────────────────────────────────────────────────
@@ -499,6 +574,10 @@ def purge_old_data(
 
     # Kembalikan ruang disk ke OS (WAL + auto_vacuum tidak cukup tanpa VACUUM)
     c.execute("VACUUM")
+
+    # FIX #07: Bersihkan candle confirm state yang sudah terlalu lama (> 4 jam)
+    stale_cc = purge_candle_confirm_state(max_age_hours=4.0)
+    deleted["candle_confirm_state"] = stale_cc
 
     total = sum(deleted.values())
     print(
