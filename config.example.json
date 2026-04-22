@@ -59,7 +59,9 @@
     "max_atr_pct": 0.03,
     "require_sl_beyond_swing": false,
     "sl_swing_buffer_atr": 0,
-    "btc_bias_adx_min": 20
+    "btc_bias_adx_min": 20,
+    "candle_confirmation": true,
+    "limit_order_offset_pct": 0.002
   },
 
   "indicators": {
