@@ -431,6 +431,83 @@ def set_state(key: str, value: str):
 
 # ─── Signal Queue helper (used by main.py / auto_trades.py) ───────────────────
 
+# ─── Data Cleanup / TTL ────────────────────────────────────────────────────────
+
+def purge_old_data(
+    signals_days: int = 7,
+    closed_trades_days: int = 90,
+    sent_trades_days: int = 90,
+    daily_reports_days: int = 180,
+) -> dict:
+    """
+    Hapus data lama dari semua tabel untuk mencegah disk/memory leak.
+
+    Aturan retensi default (bisa di-override via argumen):
+      • signals          – ingested & lebih lama dari `signals_days`     (default 7 hari)
+      • active_trades    – status CLOSED/CANCELLED/FAILED & lebih lama
+                           dari `closed_trades_days`                      (default 90 hari)
+      • sent_trades      – status CLOSED/CANCELLED/FAILED & lebih lama
+                           dari `sent_trades_days`                        (default 90 hari)
+      • daily_reports    – lebih lama dari `daily_reports_days`           (default 180 hari)
+
+    Return: dict dengan jumlah baris yang dihapus per tabel.
+    """
+    now = datetime.now()
+    cutoffs = {
+        'signals':       str(now - timedelta(days=signals_days)),
+        'closed_trades': str(now - timedelta(days=closed_trades_days)),
+        'sent_trades':   str(now - timedelta(days=sent_trades_days)),
+        'daily_reports': (now - timedelta(days=daily_reports_days)).date().isoformat(),
+    }
+
+    c = _conn()
+    deleted: dict = {}
+
+    # 1. Sinyal yang sudah di-ingest dan kadaluarsa
+    cur = c.execute(
+        "DELETE FROM signals WHERE ingested = 1 AND created_at < ?",
+        (cutoffs['signals'],)
+    )
+    deleted['signals'] = cur.rowcount
+
+    # 2. Active trades yang sudah closed/cancelled/failed dan kadaluarsa
+    cur = c.execute(
+        """DELETE FROM active_trades
+           WHERE status IN ('CLOSED','CANCELLED','FAILED')
+             AND updated_at < ?""",
+        (cutoffs['closed_trades'],)
+    )
+    deleted['active_trades'] = cur.rowcount
+
+    # 3. Sent trades yang sudah selesai dan kadaluarsa
+    cur = c.execute(
+        """DELETE FROM sent_trades
+           WHERE status IN ('CLOSED','CANCELLED','FAILED')
+             AND created_at < ?""",
+        (cutoffs['sent_trades'],)
+    )
+    deleted['sent_trades'] = cur.rowcount
+
+    # 4. Daily reports yang terlalu lama
+    cur = c.execute(
+        "DELETE FROM daily_reports WHERE date_str < ?",
+        (cutoffs['daily_reports'],)
+    )
+    deleted['daily_reports'] = cur.rowcount
+
+    c.commit()
+
+    # Kembalikan ruang disk ke OS (WAL + auto_vacuum tidak cukup tanpa VACUUM)
+    c.execute("VACUUM")
+
+    total = sum(deleted.values())
+    print(
+        f"[DB purge] Dihapus {total} baris — "
+        + ", ".join(f"{t}: {n}" for t, n in deleted.items())
+    )
+    return deleted
+
+
 def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
     """Convert analyze_ticker result → signal queue entry."""
     return insert_signal({

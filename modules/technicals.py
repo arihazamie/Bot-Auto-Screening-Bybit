@@ -36,5 +36,6 @@ def get_technicals(df):
     if macd is not None:
         df['MACD_h'] = macd[macd.columns[1]]
         
-    df.dropna(inplace=True)
-    return df
+    # ✅ Aman: buat DataFrame baru (tidak mutasi caller) dan reset index agar
+    # konsisten di semua modul yang mengasumsikan index 0-based kontinu.
+    return df.dropna().reset_index(drop=True)

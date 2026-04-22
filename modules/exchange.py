@@ -120,9 +120,6 @@ class BybitClient:
         False → hanya log WARNING/ERROR (default untuk produksi)
     """
 
-    # Simbol yang tidak perlu diubah formatnya
-    _SYMBOL_CACHE: dict[str, str] = {}
-
     def __init__(self, debug: bool = False, auto_trade: bool = False):
         self.debug = debug
         self.auto_trade = auto_trade
@@ -150,6 +147,10 @@ class BybitClient:
         })
 
         logger.info("BybitClient initialized (mode=swap, rateLimit=ON)")
+
+        # Symbol normalization cache — instance variable (bukan class variable)
+        # agar tidak bocor antar instance (terutama saat testing atau multi-client)
+        self._symbol_cache: dict[str, str] = {}
 
         # FIX: Perbesar connection pool agar tidak "pool is full" saat multi-thread
         # Default pool size = 10, tapi bot pakai 20 threads → naik ke 30
@@ -183,8 +184,8 @@ class BybitClient:
           'ETHUSDT'       → 'ETH/USDT:USDT'
           'BTC/USDT:USDT' → 'BTC/USDT:USDT'  (tidak diubah)
         """
-        if symbol in self._SYMBOL_CACHE:
-            return self._SYMBOL_CACHE[symbol]
+        if symbol in self._symbol_cache:
+            return self._symbol_cache[symbol]
 
         normalized = symbol
 
@@ -197,7 +198,7 @@ class BybitClient:
         elif "/" in symbol and ":" not in symbol:
             normalized = f"{symbol}:USDT"
 
-        self._SYMBOL_CACHE[symbol] = normalized
+        self._symbol_cache[symbol] = normalized
 
         if normalized != symbol and self.debug:
             logger.debug(f"   symbol normalized: '{symbol}' → '{normalized}'")

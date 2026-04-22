@@ -43,6 +43,7 @@ logger = logging.getLogger("PaperRunner")
 RISK             = CONFIG["risk"]
 USE_MAX_LEVERAGE = RISK.get("use_max_leverage", False)   # True = pakai max lev tiap coin dari Bybit
 TARGET_LEV       = RISK["target_leverage"]               # Fallback / fixed leverage jika use_max_leverage=False
+MAX_LEVERAGE_CAP = RISK.get("max_leverage_cap", 20)      # Hard cap — tidak bisa dilewati meski Bybit izinkan lebih
 RISK_PERCENT     = RISK["risk_percent"]
 MAX_POSITIONS    = RISK["max_positions"]
 MAX_DAILY_LOSS   = RISK.get("max_daily_loss_pct", 0.01)
@@ -80,11 +81,19 @@ def _get_leverage_for(symbol: str) -> int:
       → fallback ke TARGET_LEV (config)
     """
     if not USE_MAX_LEVERAGE:
-        return TARGET_LEV
+        return min(TARGET_LEV, MAX_LEVERAGE_CAP)
 
-    client = _get_client()
+    client  = _get_client()
     max_lev = client.fetch_max_leverage(symbol, fallback=TARGET_LEV)
-    return max_lev
+
+    # Hard cap: tidak boleh melebihi max_leverage_cap, apapun yang Bybit izinkan
+    capped = min(max_lev, MAX_LEVERAGE_CAP)
+    if capped < max_lev:
+        logger.info(
+            f"[{symbol}] leverage Bybit={max_lev}x → di-cap menjadi {capped}x "
+            f"(max_leverage_cap={MAX_LEVERAGE_CAP}x)"
+        )
+    return capped
 
 
 # ══════════════════════════════════════════════════════════════════════════════

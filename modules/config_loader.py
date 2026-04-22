@@ -127,6 +127,11 @@ def load_config() -> dict:
     if not isinstance(target_leverage, int) or target_leverage < 1:
         risk_errors.append("  - risk.target_leverage: harus integer ≥ 1")
 
+    max_leverage_cap = risk.get("max_leverage_cap")
+    if max_leverage_cap is not None:
+        if not isinstance(max_leverage_cap, int) or max_leverage_cap < 1:
+            risk_errors.append("  - risk.max_leverage_cap: harus integer ≥ 1 (misal 20)")
+
     tp_split = risk.get("tp_split", [])
     if (not isinstance(tp_split, list) or len(tp_split) != 3
             or not all(isinstance(x, (int, float)) for x in tp_split)

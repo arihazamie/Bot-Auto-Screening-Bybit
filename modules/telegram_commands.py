@@ -45,6 +45,30 @@ _ENABLED = bool(_TOKEN and _CHAT_ID and 'YOUR_' not in _TOKEN)
 #   - is_set()  → cek status (main scan thread) — atomic, tidak butuh lock
 _paused = threading.Event()
 
+# ── Rate limiter ────────────────────────────────────────────────────────────
+# Batasi setiap chat_id maksimal _RATE_LIMIT_MAX perintah dalam
+# _RATE_LIMIT_WINDOW detik, untuk mencegah spam atau loop otomatis.
+# Dict tidak perlu Lock karena GIL Python melindungi operasi sederhana
+# seperti get/set pada dict — cukup untuk penggunaan ini.
+_RATE_LIMIT_WINDOW = 60       # detik
+_RATE_LIMIT_MAX    = 10       # perintah per window
+_rate_buckets: dict[str, list[float]] = {}   # { str(chat_id): [timestamp, ...] }
+
+
+def _rate_check(chat_id) -> bool:
+    """Return True jika perintah boleh diproses, False jika rate limit terlampaui."""
+    key = str(chat_id)
+    now = time.time()
+    bucket = _rate_buckets.get(key, [])
+    # Buang timestamps yang sudah di luar window
+    bucket = [t for t in bucket if now - t < _RATE_LIMIT_WINDOW]
+    if len(bucket) >= _RATE_LIMIT_MAX:
+        _rate_buckets[key] = bucket
+        return False
+    bucket.append(now)
+    _rate_buckets[key] = bucket
+    return True
+
 
 def is_paused() -> bool:
     """Dibaca oleh main.py untuk skip scan cycle jika paused. Thread-safe."""
@@ -346,6 +370,11 @@ def _dispatch(update: dict):
     if not _authorized(chat_id):
         logger.warning(f"[TelegramCmd] Unauthorized access from chat_id={chat_id}")
         _send(chat_id, "🚫 Akses tidak diizinkan.")
+        return
+
+    if not _rate_check(chat_id):
+        logger.warning(f"[TelegramCmd] Rate limit hit for chat_id={chat_id}")
+        _send(chat_id, "⏳ Terlalu banyak perintah. Tunggu sebentar lalu coba lagi.", reply_to=msg_id)
         return
 
     # Ambil command (ignore @botname suffix misal /status@MyBot)
