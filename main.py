@@ -30,6 +30,7 @@ from modules.database import (
     get_closed_trades_today,
     get_trades_today,
     get_paper_balance,
+    purge_old_data,
 )
 from modules.technicals import get_technicals, detect_divergence
 from modules.quant import calculate_metrics, check_fakeout
@@ -89,6 +90,11 @@ print(f"📐 Timeframes — Entry: {ENTRY_TF} | Trend: {TREND_TF}")
 # Exchange client (singleton)
 # ─────────────────────────────────────────────────────────────────────────────
 client = BybitClient(debug=DEBUG_MODE, auto_trade=AUTO_TRADE_ENABLED)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX: Bot startup timestamp — dipakai oleh heartbeat untuk hitung uptime
+# ─────────────────────────────────────────────────────────────────────────────
+_START_TIME = time.time()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,6 +214,13 @@ MIN_ATR_PCT             = float(STRATEGY_CFG.get("min_atr_pct", 0.0015))
 MAX_ATR_PCT             = float(STRATEGY_CFG.get("max_atr_pct", 0.03))
 REQUIRE_SL_BEYOND_SWING = bool(STRATEGY_CFG.get("require_sl_beyond_swing", True))
 SL_SWING_BUFFER_ATR     = float(STRATEGY_CFG.get("sl_swing_buffer_atr", 0.1))
+
+# ─── FIX #02 Part A: SL Floor Minimum ────────────────────────────────────────
+# SL tidak boleh lebih dekat dari MIN_SL_PCT dari entry.
+# Tujuan: cegah SL terlalu ketat (< spread+slippage) yang mudah kena stop hunt.
+# Contoh: entry $100, min_sl_pct=0.005 → SL Long max $99.50, SL Short min $100.50
+# Config: tambahkan "min_sl_pct": 0.005 di bagian "strategy" untuk override.
+MIN_SL_PCT = float(STRATEGY_CFG.get("min_sl_pct", 0.005))  # default 0.5%
 
 # ─── FIX #5: Candle Confirmation ──────────────────────────────────────────────
 # Tunggu satu candle close setelah pattern terbentuk sebelum entry.
@@ -572,6 +585,27 @@ def _step_build_trade_setup(
             f"{ask if side == 'Long' else bid:.6f} → entry={entry:.6f}"
         )
     sl    = (entry - atr * ATR_SL_MULTIPLIER) if side == "Long" else (entry + atr * ATR_SL_MULTIPLIER)
+
+    # ─── FIX #02 Part A: Enforce SL Floor Minimum ─────────────────────────────
+    # Pastikan SL tidak lebih dekat dari MIN_SL_PCT (0.5%) dari entry.
+    # Jika ATR terlalu kecil (low-vol pair) → SL otomatis ditarik ke floor.
+    # Ini mencegah stop hunt: SL 0.1–0.2% hampir pasti kena spread/slippage.
+    if MIN_SL_PCT > 0:
+        sl_floor_long  = entry * (1.0 - MIN_SL_PCT)   # SL Long  ≤ floor ini
+        sl_floor_short = entry * (1.0 + MIN_SL_PCT)   # SL Short ≥ floor ini
+        if side == "Long" and sl > sl_floor_long:
+            logger.debug(
+                f"[{symbol}] SL floor applied (Long): "
+                f"{sl:.6f} → {sl_floor_long:.6f} (min {MIN_SL_PCT:.2%} dari entry)"
+            )
+            sl = sl_floor_long
+        elif side == "Short" and sl < sl_floor_short:
+            logger.debug(
+                f"[{symbol}] SL floor applied (Short): "
+                f"{sl:.6f} → {sl_floor_short:.6f} (min {MIN_SL_PCT:.2%} dari entry)"
+            )
+            sl = sl_floor_short
+
     tp1, tp2, tp3 = build_rr_targets(entry, sl, side)
 
     quality_reason = entry_quality_reject_reason(
@@ -875,6 +909,55 @@ def scan():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX #HEARTBEAT: Kirim status bot ke Telegram setiap jam
+#
+# Masalah: Tidak ada cara user tahu bot masih hidup tanpa sinyal masuk.
+# Fix: Heartbeat otomatis tiap jam berisi uptime, balance, dan trade count.
+# Jika heartbeat berhenti → bot mati / hang → user tahu langsung.
+# ─────────────────────────────────────────────────────────────────────────────
+def send_heartbeat():
+    """Kirim status ringkas bot ke Telegram setiap jam sebagai tanda hidup."""
+    try:
+        uptime_sec    = time.time() - _START_TIME
+        uptime_h      = int(uptime_sec // 3600)
+        uptime_m      = int((uptime_sec % 3600) // 60)
+        trades_today  = get_trades_today()
+        trade_count   = len(trades_today)
+        mode_label    = "AUTO 🤖" if AUTO_TRADE_ENABLED else "PAPER 📋"
+
+        # Balance
+        try:
+            if AUTO_TRADE_ENABLED:
+                bal_info = client.fetch_balance()
+                balance  = float(bal_info["total"]["USDT"])
+                bal_str  = f"${balance:.2f} USDT"
+            else:
+                balance = get_paper_balance()
+                bal_str = f"${balance:.2f} (paper)"
+        except Exception:
+            bal_str = "N/A"
+
+        msg = (
+            f"💗 <b>Heartbeat — Bot Aktif</b>\n"
+            f"{'─' * 24}\n"
+            f"⏱ Uptime       : <code>{uptime_h}h {uptime_m}m</code>\n"
+            f"💼 Balance      : <code>{bal_str}</code>\n"
+            f"📊 Trades hari ini : <code>{trade_count}/{MAX_DAILY_TRADES or '∞'}</code>\n"
+            f"🔧 Mode         : <code>{mode_label}</code>\n"
+            f"<i>🕐 {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC</i>"
+        )
+        from modules.telegram_bot import send_alert
+        from modules.notifier import send
+        send(msg)
+        logger.info(
+            f"💗 Heartbeat sent — Uptime: {uptime_h}h {uptime_m}m | "
+            f"Balance: {bal_str} | Trades: {trade_count}"
+        )
+    except Exception as e:
+        logger.error(f"send_heartbeat error: {type(e).__name__}: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Watchlist refresh
 # ─────────────────────────────────────────────────────────────────────────────
 def refresh_daily_watchlist():
@@ -928,9 +1011,15 @@ if __name__ == "__main__":
     schedule.every(15).minutes.do(scan)
     schedule.every(1).minutes.do(run_paper_update)
     schedule.every().day.at("07:00").do(refresh_daily_watchlist)
+    # FIX #01: Purge data lama setiap hari jam 03:00 — cegah disk full
+    schedule.every().day.at("03:00").do(purge_old_data)
+    # FIX #03: Heartbeat ke Telegram tiap jam — operational awareness
+    schedule.every(1).hours.do(send_heartbeat)
 
     print("\n🚀 Bot Started.")
     print(f"🕖 Watchlist refresh otomatis setiap hari jam 07:00")
+    print(f"🧹 DB purge otomatis setiap hari jam 03:00 (cegah disk full)")
+    print(f"💗 Heartbeat Telegram otomatis setiap 1 jam")
     print(f"💡 Tip: set \"debug\": true di config.json untuk verbose output\n")
     while True:
         schedule.run_pending()

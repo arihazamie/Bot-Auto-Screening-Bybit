@@ -901,7 +901,7 @@
         <div class="hero-meta">
           <div class="hm"><b>25 files</b> · ~3,300 LOC</div>
           <div class="hm"><b>13 modules</b> analyzed</div>
-          <div class="hm hm-g"><b>14 fixes</b> already done</div>
+          <div class="hm hm-g"><b>17 fixes</b> already done</div>
           <div class="hm"><b>22 improvements</b> proposed</div>
           <div class="hm"><b>Python 3.10+</b> · CCXT · SQLite · Telegram</div>
         </div>
@@ -2218,15 +2218,17 @@
         <div class="impr">
           <div class="impr-head">
             <div class="impr-num">01</div>
-            <div class="impr-title">Schedule purge_old_data() di main.py</div>
-            <span class="badge b-crit">KRITIS</span>
+            <div class="impr-title"><s>Schedule purge_old_data() di main.py</s></div>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
-              <strong>Masalah:</strong> <code>database.py</code> memiliki fungsi
-              purge lengkap tapi tidak pernah dipanggil. Setiap sinyal yang
-              di-send tersimpan di <code>sent_trades</code>. Bot yang aktif 24/7
-              akan mengakumulasi ribuan record per minggu.
+              <strong>✅ Diimplementasikan:</strong> <code>purge_old_data()</code>
+              sekarang dijadwalkan otomatis setiap hari jam <code>03:00</code>
+              via <code>schedule.every().day.at("03:00").do(purge_old_data)</code>.
+              Import ditambahkan di blok <code>from modules.database import ...</code>.
+              Data lama otomatis terhapus: signals (7 hari), trades (90 hari),
+              reports (180 hari) — disertai VACUUM untuk kembalikan ruang ke OS.
             </p>
             <div class="cb">
               <span class="cm"
@@ -2273,60 +2275,51 @@
           <div class="impr-head">
             <div class="impr-num">02</div>
             <div class="impr-title">
-              Tambahkan SL Floor Minimum (0.5% dari entry)
+              <s>SL Floor 0.5% + Max Loss 1% Per Trade</s>
             </div>
-            <span class="badge b-crit">KRITIS</span>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
-              <strong>Masalah:</strong> SL = <code>entry ± ATR × 1.5</code>.
-              Pada low-volatility coins, ATR bisa sangat kecil. SL 0.1–0.2% dari
-              entry hampir pasti terkena spread + slippage bahkan tanpa adverse
-              movement.
+              <strong>✅ Diimplementasikan (dua lapis proteksi):</strong>
+            </p>
+            <p>
+              <strong>Part A — SL Floor di <code>main.py</code>:</strong>
+              SL tidak boleh lebih dekat dari <code>0.5%</code> (min_sl_pct) dari
+              entry. Jika ATR terlalu kecil → SL otomatis ditarik ke floor. Mencegah
+              stop hunt pada low-vol pairs (SL 0.1–0.2% hampir pasti kena spread).
+            </p>
+            <p>
+              <strong>Part B — Max Loss Cap di <code>paper_runner.py</code>:</strong>
+              Qty di-cap agar jika SL kena, loss tidak melebihi
+              <code>max_loss_per_trade_pct</code> (default <b>1%</b>) dari total modal.
             </p>
             <div class="cb">
-              <span class="cm"
-                ># main.py — _step_build_trade_setup(), setelah hitung sl:</span
-              >
-              sl = (entry - atr * ATR_SL_MULTIPLIER)
-              <span class="kw">if</span> side == <span class="st">"Long"</span>
-              <span class="kw">else</span> (entry + atr * ATR_SL_MULTIPLIER)
-              MIN_SL_PCT = <span class="fn">float</span>(STRATEGY_CFG.get(<span
-                class="st"
-                >"min_sl_pct"</span
-              >, <span class="nu">0.005</span>)) <span class="cm"># 0.5%</span>
-              <span class="kw">if</span> side == <span class="st">"Long"</span>:
-              sl = <span class="fn">min</span>(sl, entry * (<span class="nu"
-                >1.0</span
-              >
-              - MIN_SL_PCT))
-              <span class="cm"># SL tidak boleh lebih dekat dari 0.5%</span>
-              <span class="kw">else</span>: sl = <span class="fn">max</span>(sl,
-              entry * (<span class="nu">1.0</span> + MIN_SL_PCT))
+              <span class="cm"># Formula Part B (paper_runner.py → _ingest_signals):</span>
+              max_loss_dollar = equity × 0.01    <span class="cm"># 1% dari modal</span>
+              risk_distance   = |entry − sl|     <span class="cm"># jarak entry ke SL</span>
+              max_qty_by_risk = max_loss_dollar / risk_distance
+              qty = <span class="fn">min</span>(qty_normal, max_qty_by_risk)
+              <span class="cm"># Contoh: $100 modal, entry $10, SL $9.80 (jarak $0.20)</span>
+              <span class="cm"># max_qty = $1 / $0.20 = 5 unit → loss SL = $1.00 = 1% ✅</span>
             </div>
             <div class="impact">
-              <div class="impact-head">▸ Jika Diimplementasikan</div>
+              <div class="impact-head">▸ Hasil Implementasi</div>
               <div class="impact-grid">
                 <div class="impact-col pos">
                   <h5>Positif</h5>
                   <ul>
-                    <li>Eliminasi stop hunt pada low-vol pairs</li>
-                    <li>SL selalu > spread + slippage cost</li>
-                    <li>Lebih sedikit false SL hit pada sideways market</li>
-                    <li>R:R calculation lebih reliable</li>
+                    <li>Loss per trade dijamin ≤ 1% modal (hard cap)</li>
+                    <li>SL floor cegah stop hunt pada low-vol pairs</li>
+                    <li>Berlaku konsisten di semua leverage setting</li>
+                    <li>Config override via <code>"max_loss_per_trade_pct"</code></li>
                   </ul>
                 </div>
                 <div class="impact-col neg">
                   <h5>Trade-off</h5>
                   <ul>
-                    <li>
-                      Beberapa sinyal R:R bisa drop di bawah min_rr — reject
-                      lebih banyak
-                    </li>
-                    <li>
-                      Perlu tuning min_sl_pct per pair type (BTC lebih kecil ok,
-                      altcoin lebih besar)
-                    </li>
+                    <li>Qty lebih kecil dari normal pada SL yang lebar</li>
+                    <li>Beberapa sinyal R:R bisa drop setelah SL floor</li>
                   </ul>
                 </div>
               </div>
@@ -2338,54 +2331,41 @@
         <div class="impr">
           <div class="impr-head">
             <div class="impr-num">03</div>
-            <div class="impr-title">Tambahkan Heartbeat ke Telegram</div>
-            <span class="badge b-crit">KRITIS</span>
+            <div class="impr-title"><s>Tambahkan Heartbeat ke Telegram</s></div>
+            <span class="badge b-done">✅ DONE</span>
           </div>
           <div class="impr-body">
             <p>
-              <strong>Masalah:</strong> Tidak ada cara user mengetahui bot masih
-              hidup tanpa sinyal masuk. Jika bot crash jam 2 pagi, user baru
-              tahu pas pagi hari setelah banyak opportunity terlewat.
+              <strong>✅ Diimplementasikan:</strong> Fungsi <code>send_heartbeat()</code>
+              ditambahkan di <code>main.py</code> dengan schedule
+              <code>every(1).hours</code>. Setiap jam mengirim pesan ke Telegram berisi:
+              uptime bot, balance (real/paper), jumlah trades hari ini, dan mode aktif.
+              Variabel <code>_START_TIME = time.time()</code> di-set saat startup untuk
+              menghitung uptime akurat.
             </p>
             <div class="cb">
-              <span class="cm"># main.py — tambahkan fungsi dan schedule:</span>
-              <span class="kw">def</span>
-              <span class="fn">send_heartbeat</span>(): uptime = time.time() -
-              _START_TIME h = <span class="fn">int</span>(uptime //
-              <span class="nu">3600</span>) trades_today =
-              <span class="fn">len</span>(get_trades_today()) send_alert_simple(
-              f<span class="st"
-                >"💗 Bot aktif | Uptime: {h}h | Trades hari ini:
-                {trades_today}/{MAX_DAILY_TRADES}"</span
-              >
-              ) _START_TIME = time.time() schedule.every(<span class="nu"
-                >1</span
-              >).hours.<span class="fn">do</span>(send_heartbeat)
+              <span class="cm"># Contoh pesan Heartbeat yang dikirim:</span>
+              💗 <b>Heartbeat — Bot Aktif</b>
+              ⏱ Uptime       : <span class="st">5h 23m</span>
+              💼 Balance      : <span class="st">$102.45 (paper)</span>
+              📊 Trades hari ini : <span class="st">2/3</span>
+              🔧 Mode         : <span class="st">PAPER 📋</span>
             </div>
             <div class="impact">
-              <div class="impact-head">▸ Jika Diimplementasikan</div>
+              <div class="impact-head">▸ Hasil Implementasi</div>
               <div class="impact-grid">
                 <div class="impact-col pos">
                   <h5>Positif</h5>
                   <ul>
-                    <li>
-                      Immediate awareness jika bot mati (tidak ada heartbeat)
-                    </li>
-                    <li>Double sebagai uptime monitor + daily trade counter</li>
+                    <li>Immediate awareness jika bot mati (tidak ada heartbeat)</li>
+                    <li>Uptime monitor + balance + trade counter sekaligus</li>
                     <li>User tenang — tahu bot berjalan normal</li>
-                    <li>Simple to implement (~10 baris)</li>
                   </ul>
                 </div>
                 <div class="impact-col neg">
                   <h5>Trade-off</h5>
                   <ul>
-                    <li>
-                      1 Telegram message/jam → 24 msg/hari (tidak significant)
-                    </li>
-                    <li>
-                      Perlu silent heartbeat option jika user tidak mau
-                      notifikasi
-                    </li>
+                    <li>1 Telegram message/jam → 24 msg/hari</li>
                   </ul>
                 </div>
               </div>
@@ -3676,28 +3656,28 @@
               <td><s>R:R +0.05–0.15</s></td>
               <td><code>main.py</code></td>
             </tr>
-            <tr>
-              <td>01</td>
-              <td>Schedule purge_old_data()</td>
-              <td><span class="badge b-crit">KRITIS</span></td>
-              <td>15 menit</td>
-              <td>Cegah disk full</td>
+            <tr class="done-row">
+              <td><s>01</s></td>
+              <td><s>Schedule purge_old_data()</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>15 menit</s></td>
+              <td><s>Cegah disk full</s></td>
               <td><code>main.py</code></td>
             </tr>
-            <tr>
-              <td>02</td>
-              <td>SL Floor Minimum 0.5%</td>
-              <td><span class="badge b-crit">KRITIS</span></td>
-              <td>30 menit</td>
-              <td>Eliminasi stop hunt</td>
-              <td><code>main.py</code></td>
+            <tr class="done-row">
+              <td><s>02</s></td>
+              <td><s>Max Loss 1% Per Trade + SL Floor 0.5%</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>30 menit</s></td>
+              <td><s>Eliminasi stop hunt + cap loss</s></td>
+              <td><code>main.py, paper_runner.py</code></td>
             </tr>
-            <tr>
-              <td>03</td>
-              <td>Heartbeat ke Telegram tiap jam</td>
-              <td><span class="badge b-crit">KRITIS</span></td>
-              <td>30 menit</td>
-              <td>Operational awareness</td>
+            <tr class="done-row">
+              <td><s>03</s></td>
+              <td><s>Heartbeat ke Telegram tiap jam</s></td>
+              <td><span class="badge b-done">✅ DONE</span></td>
+              <td><s>30 menit</s></td>
+              <td><s>Operational awareness</s></td>
               <td><code>main.py</code></td>
             </tr>
             <tr>

@@ -51,6 +51,22 @@ DAILY_TARGET     = RISK.get("daily_profit_target_pct", 0.015)
 MAX_DAILY_TRADES = RISK.get("max_daily_trades", 3)
 MODE             = "PAPER"
 
+# ─── FIX #02 Part B: Max Loss Per Trade ──────────────────────────────────────
+# Batas kerugian maksimum per trade sebagai % dari total modal (balance).
+# Logika: qty di-cap agar jika SL kena, loss ≤ balance × MAX_LOSS_PER_TRADE_PCT.
+#
+# Formula:
+#   max_loss_dollar  = balance × max_loss_per_trade_pct   (e.g. $100 × 1% = $1)
+#   risk_distance    = |entry − sl|                        (jarak harga entry ke SL)
+#   max_qty_by_risk  = max_loss_dollar / risk_distance     (qty maksimum yg aman)
+#   qty_final        = min(qty_normal, max_qty_by_risk)
+#
+# Contoh: balance $100, entry $10, SL $9.80 (jarak $0.20), max_loss $1
+#   max_qty = $1 / $0.20 = 5 unit → loss saat SL = 5 × $0.20 = $1.00 ✅
+#
+# Config: tambahkan "max_loss_per_trade_pct": 0.01 di bagian "risk" untuk override.
+MAX_LOSS_PER_TRADE_PCT = float(RISK.get("max_loss_per_trade_pct", 0.01))  # default 1%
+
 # ─── Exchange (public-only — untuk harga & market info) ───────────────────
 _client: BybitClient | None = None
 _client_lock = threading.Lock()
@@ -184,6 +200,24 @@ def _ingest_signals():
 
         position_value = equity * RISK_PERCENT * final_lev
         qty = position_value / entry if entry > 0 else 0
+
+        # ─── FIX #02 Part B: Cap qty agar loss SL ≤ MAX_LOSS_PER_TRADE_PCT ───
+        # Berapa pun leverage-nya, loss nyata tidak boleh > 1% dari modal.
+        # max_qty_by_risk = max_loss_dollar / risk_distance
+        risk_distance = abs(entry - sl)
+        if risk_distance > 0 and qty > 0:
+            max_loss_dollar = equity * MAX_LOSS_PER_TRADE_PCT
+            max_qty_by_risk = max_loss_dollar / risk_distance
+            if qty > max_qty_by_risk:
+                logger.info(
+                    f"[{sym}] ⚖️  qty capped by max-loss rule: "
+                    f"{qty:.4f} → {max_qty_by_risk:.4f} "
+                    f"(max loss ${max_loss_dollar:.2f} = {MAX_LOSS_PER_TRADE_PCT:.0%} modal, "
+                    f"SL distance={risk_distance:.6f})"
+                )
+                qty = max_qty_by_risk
+                # Recalculate position_value dari qty baru agar log tetap akurat
+                position_value = qty * entry
 
         if position_value < 6.0:
             logger.warning(
