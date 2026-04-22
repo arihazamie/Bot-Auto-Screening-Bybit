@@ -1,309 +1,438 @@
 """
-database.py — JSON File Storage (no external DB required)
-Data disimpan di folder /data sebagai file .json
+database.py — SQLite Storage (built-in Python, zero external dependencies)
+Single file  : data/bot.db
+Journal mode : WAL  → concurrent reads, serialised writes, no corruption on crash
 
-Perbaikan v2:
-  ✅ Atomic write — tulis ke temp file lalu os.replace() (cegah korupsi jika crash)
-  ✅ _read() terima default eksplisit — tidak ada lagi hardcode path check fragile
-  ✅ Auto-repair: file korup/kosong → reset ke default, bot tidak crash
+Tables
+------
+  signals        — signal queue  (main.py → paper_runner / auto_trades)
+  active_trades  — live / pending positions
+  sent_trades    — sinyal yang sudah dikirim ke Telegram
+  paper_state    — paper trading balance  (single row, id = 1)
+  daily_reports  — daily performance reports
+  state_store    — generic key-value  (dashboard msg id, dll)
 """
 
 import json
 import os
-import tempfile
+import re
+import sqlite3
 import threading
 from datetime import datetime, timedelta
 
 from modules.config_loader import CONFIG
 
-# ─── Storage paths ─────────────────────────────────────────
-BASE_DIR    = os.path.join(os.path.dirname(__file__), '..', 'data')
-SIGNALS_F   = os.path.join(BASE_DIR, 'signals.json')
-TRADES_F    = os.path.join(BASE_DIR, 'active_trades.json')
-SENT_F      = os.path.join(BASE_DIR, 'sent_trades.json')   # sinyal yg sudah dikirim ke Telegram
-STATE_F     = os.path.join(BASE_DIR, 'state.json')         # key-value store (dashboard msg id, dll)
-PAPER_F     = os.path.join(BASE_DIR, 'paper_state.json')
-REPORTS_F   = os.path.join(BASE_DIR, 'daily_reports.json')
+# ─── Path ─────────────────────────────────────────────────────────────────────
+BASE_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+DB_PATH  = os.path.join(BASE_DIR, 'bot.db')
 
-_lock = threading.Lock()
-
-
-# ─── Helpers ───────────────────────────────────────────────
-
-def _read(path: str, default):
-    """
-    Baca JSON dari path. Jika file tidak ada atau korup, kembalikan default.
-    File korup di-reset ke default otomatis — bot tidak crash saat startup.
-    """
-    if not os.path.exists(path):
-        return default
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            content = f.read().strip()
-            if not content:
-                return default
-            return json.loads(content)
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"warning [database] File korup, reset ke default: {os.path.basename(path)} | {e}")
-        _write(path, default)
-        return default
+# ─── Thread-local connections ─────────────────────────────────────────────────
+# Each thread owns its own sqlite3.Connection — avoids "check_same_thread" issues.
+# WAL mode: multiple readers run in parallel; writers serialise at the DB level.
+_local    = threading.local()
+_BOOL_COLS = {'ingested', 'is_sl_moved', '_tp1_logged', '_tp2_logged'}
+_SAFE_COL  = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')   # column name whitelist
 
 
-def _write(path: str, data):
-    """
-    Tulis JSON secara ATOMIC: temp file -> fsync -> os.replace().
-
-    os.replace() atomic di Linux & Windows NTFS — jika proses mati
-    di tengah write, file lama tetap utuh (tidak ada JSON parsial).
-    """
-    dir_name = os.path.dirname(path)
-    os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, default=str)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+def _conn() -> sqlite3.Connection:
+    """Return (or create) the per-thread SQLite connection."""
+    if not hasattr(_local, 'conn'):
+        os.makedirs(BASE_DIR, exist_ok=True)
+        c = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")   # safe with WAL, faster than FULL
+        c.execute("PRAGMA foreign_keys=ON")
+        _local.conn = c
+    return _local.conn
 
 
-def _next_id(records: list) -> int:
-    return max((r['id'] for r in records), default=0) + 1
+def _to_dict(row) -> dict | None:
+    """sqlite3.Row → plain dict; bool columns restored to Python bool."""
+    if row is None:
+        return None
+    d = dict(row)
+    for col in _BOOL_COLS:
+        if col in d and d[col] is not None:
+            d[col] = bool(d[col])
+    return d
 
 
-# ─── Init ──────────────────────────────────────────────────
+def _to_int(val) -> int:
+    """Python bool / truthy → int for SQLite boolean columns."""
+    return 1 if val else 0
+
+
+# ─── Init ──────────────────────────────────────────────────────────────────────
 
 def init_db():
     os.makedirs(BASE_DIR, exist_ok=True)
-    for path, default in [
-        (SIGNALS_F,  []),
-        (TRADES_F,   []),
-        (SENT_F,     []),
-        (STATE_F,    {}),
-        (REPORTS_F,  {}),
-        (PAPER_F,    {"balance": CONFIG['risk']['paper_balance']}),
-    ]:
-        if not os.path.exists(path):
-            _write(path, default)
-    print("JSON storage ready (atomic write ON) -- folder: data/")
+    c = _conn()
+    c.executescript("""
+        -- ── signals ──────────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS signals (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol           TEXT,
+            side             TEXT,
+            timeframe        TEXT,
+            entry_price      REAL,
+            sl_price         REAL,
+            tp1              REAL,
+            tp2              REAL,
+            tp3              REAL,
+            rr               REAL,
+            pattern          TEXT,
+            btc_bias         TEXT,
+            telegram_msg_id  INTEGER,
+            ingested         INTEGER NOT NULL DEFAULT 0,
+            created_at       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_signals_ingested ON signals (ingested);
+
+        -- ── active_trades ─────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS active_trades (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_id        INTEGER,
+            symbol           TEXT,
+            side             TEXT,
+            timeframe        TEXT,
+            entry_price      REAL,
+            sl_price         REAL,
+            tp1              REAL,
+            tp2              REAL,
+            tp3              REAL,
+            quantity         REAL,
+            leverage         INTEGER,
+            mode             TEXT,
+            status           TEXT    NOT NULL DEFAULT 'PENDING',
+            order_id         TEXT,
+            is_sl_moved      INTEGER NOT NULL DEFAULT 0,
+            _tp1_logged      INTEGER NOT NULL DEFAULT 0,
+            _tp2_logged      INTEGER NOT NULL DEFAULT 0,
+            pnl              REAL    NOT NULL DEFAULT 0,
+            telegram_msg_id  INTEGER,
+            created_at       TEXT,
+            updated_at       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_at_symbol  ON active_trades (symbol);
+        CREATE INDEX IF NOT EXISTS idx_at_status  ON active_trades (status);
+        CREATE INDEX IF NOT EXISTS idx_at_updated ON active_trades (updated_at);
+        CREATE INDEX IF NOT EXISTS idx_at_created ON active_trades (created_at);
+
+        -- ── sent_trades ───────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS sent_trades (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol           TEXT,
+            side             TEXT,
+            timeframe        TEXT,
+            pattern          TEXT,
+            entry_price      REAL,
+            sl_price         REAL,
+            tp1              REAL,
+            tp2              REAL,
+            tp3              REAL,
+            rr               REAL,
+            reason           TEXT,
+            tech_score       REAL,
+            quant_score      REAL,
+            deriv_score      REAL,
+            smc_score        REAL,
+            basis            TEXT,
+            btc_bias         TEXT,
+            z_score          REAL,
+            zeta_score       REAL,
+            obi              REAL,
+            tech_reasons     TEXT,
+            quant_reasons    TEXT,
+            deriv_reasons    TEXT,
+            smc_reasons      TEXT,
+            message_id       TEXT,
+            channel_id       TEXT,
+            status           TEXT NOT NULL DEFAULT 'OPEN',
+            created_at       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_st_status ON sent_trades (status);
+
+        -- ── paper_state ───────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS paper_state (
+            id         INTEGER PRIMARY KEY DEFAULT 1,
+            balance    REAL    NOT NULL,
+            updated_at TEXT
+        );
+
+        -- ── daily_reports ─────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS daily_reports (
+            date_str TEXT PRIMARY KEY,
+            data     TEXT NOT NULL
+        );
+
+        -- ── state_store ───────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS state_store (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
+    """)
+
+    # Seed paper_state (single row, never deleted)
+    c.execute(
+        "INSERT OR IGNORE INTO paper_state (id, balance, updated_at) VALUES (1, ?, ?)",
+        (CONFIG['risk']['paper_balance'], str(datetime.now()))
+    )
+    c.commit()
+    print(f"SQLite ready (WAL) — {DB_PATH}")
 
 
-# ─── Signals ───────────────────────────────────────────────
+# ─── Signals ───────────────────────────────────────────────────────────────────
 
 def insert_signal(data: dict) -> int:
-    with _lock:
-        records = _read(SIGNALS_F, default=[])
-        data['id'] = _next_id(records)
-        data['ingested'] = False
-        data['created_at'] = str(datetime.now())
-        records.append(data)
-        _write(SIGNALS_F, records)
-        return data['id']
+    c   = _conn()
+    cur = c.execute(
+        """INSERT INTO signals
+           (symbol, side, timeframe, entry_price, sl_price,
+            tp1, tp2, tp3, rr, pattern, btc_bias, telegram_msg_id, ingested, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?)""",
+        (
+            data.get('symbol'),          data.get('side'),
+            data.get('timeframe'),       data.get('entry_price'),
+            data.get('sl_price'),        data.get('tp1'),
+            data.get('tp2'),             data.get('tp3'),
+            data.get('rr'),              data.get('pattern'),
+            data.get('btc_bias'),        data.get('telegram_msg_id'),
+            str(datetime.now()),
+        )
+    )
+    c.commit()
+    return cur.lastrowid
 
 
 def get_waiting_signals() -> list:
-    return [s for s in _read(SIGNALS_F, default=[]) if not s.get('ingested')]
+    rows = _conn().execute(
+        "SELECT * FROM signals WHERE ingested = 0 ORDER BY id"
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
 def mark_signal_ingested(signal_id: int):
-    with _lock:
-        records = _read(SIGNALS_F, default=[])
-        for r in records:
-            if r['id'] == signal_id:
-                r['ingested'] = True
-        _write(SIGNALS_F, records)
+    c = _conn()
+    c.execute("UPDATE signals SET ingested = 1 WHERE id = ?", (signal_id,))
+    c.commit()
 
 
-# ─── Active Trades ─────────────────────────────────────────
+# ─── Active Trades ─────────────────────────────────────────────────────────────
 
 def insert_active_trade(data: dict) -> int:
-    with _lock:
-        records = _read(TRADES_F, default=[])
-        data['id'] = _next_id(records)
-        data.setdefault('status', 'PENDING')
-        data.setdefault('order_id', None)
-        data.setdefault('is_sl_moved', False)
-        data.setdefault('pnl', 0)
-        data.setdefault('telegram_msg_id', None)
-        data['created_at'] = str(datetime.now())
-        data['updated_at'] = str(datetime.now())
-        records.append(data)
-        _write(TRADES_F, records)
-        return data['id']
+    c   = _conn()
+    now = str(datetime.now())
+    cur = c.execute(
+        """INSERT INTO active_trades
+           (signal_id, symbol, side, timeframe, entry_price, sl_price,
+            tp1, tp2, tp3, quantity, leverage, mode,
+            status, order_id, is_sl_moved, pnl, telegram_msg_id,
+            created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            data.get('signal_id'),                    data.get('symbol'),
+            data.get('side'),                         data.get('timeframe'),
+            data.get('entry_price'),                  data.get('sl_price'),
+            data.get('tp1'),                          data.get('tp2'),
+            data.get('tp3'),                          data.get('quantity'),
+            data.get('leverage'),                     data.get('mode'),
+            data.get('status', 'PENDING'),            data.get('order_id'),
+            _to_int(data.get('is_sl_moved', False)),  data.get('pnl', 0),
+            data.get('telegram_msg_id'),              now, now,
+        )
+    )
+    c.commit()
+    return cur.lastrowid
 
 
 def update_active_trade(trade_id: int, fields: dict):
-    with _lock:
-        records = _read(TRADES_F, default=[])
-        for r in records:
-            if r['id'] == trade_id:
-                r.update(fields)
-                r['updated_at'] = str(datetime.now())
-        _write(TRADES_F, records)
+    """Dynamic UPDATE — only touches the columns present in fields."""
+    if not fields:
+        return
+
+    # Only allow safe SQL identifiers as column names
+    safe = {k: v for k, v in fields.items() if _SAFE_COL.match(k)}
+    if not safe:
+        return
+
+    safe['updated_at'] = str(datetime.now())
+
+    # Convert bool → int for SQLite boolean columns
+    for col in _BOOL_COLS:
+        if col in safe:
+            safe[col] = _to_int(safe[col])
+
+    set_clause = ', '.join(f'"{k}" = ?' for k in safe)
+    values     = list(safe.values()) + [trade_id]
+
+    c = _conn()
+    c.execute(f"UPDATE active_trades SET {set_clause} WHERE id = ?", values)
+    c.commit()
 
 
 def get_active_trade_by_symbol(symbol: str, status: str = None):
-    closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    for r in _read(TRADES_F, default=[]):
-        if r['symbol'] != symbol:
-            continue
-        if status and r.get('status') != status:
-            continue
-        if not status and r.get('status') in closed:
-            continue
-        return r
-    return None
+    if status:
+        row = _conn().execute(
+            "SELECT * FROM active_trades WHERE symbol = ? AND status = ? LIMIT 1",
+            (symbol, status)
+        ).fetchone()
+    else:
+        row = _conn().execute(
+            """SELECT * FROM active_trades
+               WHERE symbol = ? AND status NOT IN ('CLOSED','CANCELLED','FAILED')
+               LIMIT 1""",
+            (symbol,)
+        ).fetchone()
+    return _to_dict(row)
 
 
 def get_active_trades_by_status(statuses: list) -> list:
-    return [r for r in _read(TRADES_F, default=[]) if r.get('status') in statuses]
+    placeholders = ','.join('?' * len(statuses))
+    rows = _conn().execute(
+        f"SELECT * FROM active_trades WHERE status IN ({placeholders})",
+        statuses
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
 def count_open_active_trades() -> int:
-    closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    return sum(1 for r in _read(TRADES_F, default=[]) if r.get('status') not in closed)
+    row = _conn().execute(
+        "SELECT COUNT(*) FROM active_trades WHERE status NOT IN ('CLOSED','CANCELLED','FAILED')"
+    ).fetchone()
+    return row[0]
 
 
 def get_closed_trades_last_24h() -> list:
-    since = datetime.now() - timedelta(hours=24)
-    result = []
-    for r in _read(TRADES_F, default=[]):
-        if r.get('status') != 'CLOSED':
-            continue
-        try:
-            updated = datetime.fromisoformat(r['updated_at'])
-            if updated >= since:
-                result.append(r)
-        except Exception:
-            pass
-    return result
+    since = str(datetime.now() - timedelta(hours=24))
+    rows  = _conn().execute(
+        "SELECT * FROM active_trades WHERE status = 'CLOSED' AND updated_at >= ?",
+        (since,)
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
 def get_closed_trades_today() -> list:
-    today = datetime.now().date()
-    result = []
-    for r in _read(TRADES_F, default=[]):
-        if r.get('status') != 'CLOSED':
-            continue
-        try:
-            updated = datetime.fromisoformat(r['updated_at'])
-            if updated.date() == today:
-                result.append(r)
-        except Exception:
-            pass
-    return result
+    today = datetime.now().date().isoformat()
+    rows  = _conn().execute(
+        "SELECT * FROM active_trades WHERE status = 'CLOSED' AND DATE(updated_at) = ?",
+        (today,)
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
 def get_trades_last_24h() -> list:
-    since = datetime.now() - timedelta(hours=24)
-    result = []
-    for r in _read(TRADES_F, default=[]):
-        try:
-            created = datetime.fromisoformat(r.get('created_at', ''))
-            if created >= since:
-                result.append(r)
-        except Exception:
-            pass
-    return result
+    since = str(datetime.now() - timedelta(hours=24))
+    rows  = _conn().execute(
+        "SELECT * FROM active_trades WHERE created_at >= ?",
+        (since,)
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
 def get_trades_today() -> list:
-    today = datetime.now().date()
-    result = []
-    for r in _read(TRADES_F, default=[]):
-        try:
-            created = datetime.fromisoformat(r.get('created_at', ''))
-            if created.date() == today:
-                result.append(r)
-        except Exception:
-            pass
-    return result
+    today = datetime.now().date().isoformat()
+    rows  = _conn().execute(
+        "SELECT * FROM active_trades WHERE DATE(created_at) = ?",
+        (today,)
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
-# ─── Paper State ───────────────────────────────────────────
+# ─── Paper State ───────────────────────────────────────────────────────────────
 
 def get_paper_balance() -> float:
-    data = _read(PAPER_F, default={"balance": CONFIG['risk']['paper_balance']})
-    return float(data.get('balance', CONFIG['risk']['paper_balance']))
+    row = _conn().execute("SELECT balance FROM paper_state WHERE id = 1").fetchone()
+    return float(row['balance']) if row else float(CONFIG['risk']['paper_balance'])
 
 
 def update_paper_balance(new_balance: float):
-    with _lock:
-        _write(PAPER_F, {"balance": new_balance, "updated_at": str(datetime.now())})
+    c = _conn()
+    c.execute(
+        "UPDATE paper_state SET balance = ?, updated_at = ? WHERE id = 1",
+        (new_balance, str(datetime.now()))
+    )
+    c.commit()
 
 
-# ─── Daily Reports ─────────────────────────────────────────
+# ─── Daily Reports ─────────────────────────────────────────────────────────────
 
 def save_daily_report(date_str: str, data: dict):
-    with _lock:
-        reports = _read(REPORTS_F, default={})
-        reports[date_str] = data
-        _write(REPORTS_F, reports)
+    c = _conn()
+    c.execute(
+        "INSERT OR REPLACE INTO daily_reports (date_str, data) VALUES (?, ?)",
+        (date_str, json.dumps(data, default=str))
+    )
+    c.commit()
 
 
-# ─── Sent Trades (sinyal yang sudah dikirim ke Telegram) ───
+# ─── Sent Trades ───────────────────────────────────────────────────────────────
 
 def insert_trade(data: dict) -> int:
-    """Simpan sinyal yang sudah berhasil dikirim ke Telegram."""
-    with _lock:
-        records = _read(SENT_F, default=[])
-        data['id'] = _next_id(records)
-        data.setdefault('status', 'OPEN')
-        data['created_at'] = str(datetime.now())
-        records.append(data)
-        _write(SENT_F, records)
-        return data['id']
+    c   = _conn()
+    cur = c.execute(
+        """INSERT INTO sent_trades
+           (symbol, side, timeframe, pattern, entry_price, sl_price,
+            tp1, tp2, tp3, rr, reason, tech_score, quant_score,
+            deriv_score, smc_score, basis, btc_bias, z_score, zeta_score,
+            obi, tech_reasons, quant_reasons, deriv_reasons, smc_reasons,
+            message_id, channel_id, status, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            data.get('symbol'),        data.get('side'),          data.get('timeframe'),
+            data.get('pattern'),       data.get('entry_price'),   data.get('sl_price'),
+            data.get('tp1'),           data.get('tp2'),           data.get('tp3'),
+            data.get('rr'),            data.get('reason'),        data.get('tech_score'),
+            data.get('quant_score'),   data.get('deriv_score'),   data.get('smc_score'),
+            data.get('basis'),         data.get('btc_bias'),      data.get('z_score'),
+            data.get('zeta_score'),    data.get('obi'),           data.get('tech_reasons'),
+            data.get('quant_reasons'), data.get('deriv_reasons'), data.get('smc_reasons'),
+            data.get('message_id'),    data.get('channel_id'),
+            data.get('status', 'OPEN'), str(datetime.now()),
+        )
+    )
+    c.commit()
+    return cur.lastrowid
 
 
 def get_trades_open() -> list:
-    """Ambil semua sinyal dengan status OPEN untuk dashboard."""
-    return [r for r in _read(SENT_F, default=[]) if r.get('status') == 'OPEN']
+    rows = _conn().execute(
+        "SELECT * FROM sent_trades WHERE status = 'OPEN' ORDER BY id"
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
 
 
 def get_active_signals() -> set:
-    """
-    Return set of (symbol, timeframe) dari sinyal yang masih aktif.
-    Dipakai main.py untuk skip duplikat saat scanning.
-    """
-    closed = {'CLOSED', 'CANCELLED', 'FAILED'}
-    result = set()
-    for r in _read(SENT_F, default=[]):
-        if r.get('status') not in closed:
-            result.add((r.get('symbol', ''), r.get('timeframe', '')))
-    return result
+    """Return set of (symbol, timeframe) for non-closed sent_trades."""
+    rows = _conn().execute(
+        "SELECT symbol, timeframe FROM sent_trades "
+        "WHERE status NOT IN ('CLOSED','CANCELLED','FAILED')"
+    ).fetchall()
+    return {(r['symbol'], r['timeframe']) for r in rows}
 
 
-# ─── State Store (key-value untuk dashboard msg id, dll) ───
+# ─── State Store ───────────────────────────────────────────────────────────────
 
 def get_state(key: str):
-    """Ambil nilai dari state store. Return None jika tidak ada."""
-    return _read(STATE_F, default={}).get(key)
+    row = _conn().execute(
+        "SELECT value FROM state_store WHERE key = ?", (key,)
+    ).fetchone()
+    return row['value'] if row else None
 
 
 def set_state(key: str, value: str):
-    """Simpan nilai ke state store."""
-    with _lock:
-        data = _read(STATE_F, default={})
-        data[key] = value
-        _write(STATE_F, data)
+    c = _conn()
+    c.execute(
+        "INSERT OR REPLACE INTO state_store (key, value) VALUES (?, ?)",
+        (key, value)
+    )
+    c.commit()
 
 
-# ─── Signal Queue (untuk auto_trades.py) ───────────────────
+# ─── Signal Queue helper (used by main.py / auto_trades.py) ───────────────────
 
 def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
-    """
-    Konversi hasil analyze_ticker ke format signal queue
-    yang bisa dibaca paper_runner.py via get_waiting_signals().
-
-    telegram_msg_id: Telegram message_id dari signal alert yang dikirim,
-    disimpan agar paper_runner bisa reply ke pesan aslinya.
-    """
+    """Convert analyze_ticker result → signal queue entry."""
     return insert_signal({
         "symbol":          res['Symbol'],
         "side":            res['Side'],

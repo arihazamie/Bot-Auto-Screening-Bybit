@@ -44,9 +44,9 @@ from modules.paper_runner import run_paper_update
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging setup — semua module pakai logger ini
-# Set DEBUG=true di env untuk verbose output
+# Set "debug": true di config.json untuk verbose output
 # ─────────────────────────────────────────────────────────────────────────────
-LOG_LEVEL = logging.DEBUG if os.getenv("BOT_DEBUG", "").lower() == "true" else logging.INFO
+LOG_LEVEL = logging.DEBUG if CONFIG.get("debug", False) else logging.INFO
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -66,7 +66,7 @@ logger = logging.getLogger("Main")
 # Mode & Config
 # ─────────────────────────────────────────────────────────────────────────────
 AUTO_TRADE_ENABLED = CONFIG.get("auto_trade", False)
-DEBUG_MODE         = os.getenv("BOT_DEBUG", "").lower() == "true"
+DEBUG_MODE         = CONFIG.get("debug", False)
 RISK_CFG           = CONFIG.get("risk", {})
 DAILY_PROFIT_TARGET = RISK_CFG.get("daily_profit_target_pct", 0.015)
 MAX_DAILY_LOSS       = RISK_CFG.get("max_daily_loss_pct", 0.01)
@@ -76,8 +76,8 @@ print("=" * 60)
 print("🤖 Bybit Screening Bot v8")
 print("=" * 60)
 print(f"   Mode    : {'AUTO TRADE 🤖' if AUTO_TRADE_ENABLED else 'PAPER TRADE 📋 (signal + simulasi)'}")
-print(f"   Debug   : {'ON 🔍' if DEBUG_MODE else 'OFF (set BOT_DEBUG=true untuk verbose)'}")
-print(f"   Env     : {os.getenv('BOT_ENV', 'PROD')}")
+print(f"   Debug   : {'ON 🔍' if DEBUG_MODE else 'OFF (set \"debug\": true di config.json untuk verbose)'}")
+print(f"   Env     : {CONFIG.get('env', 'PROD')}")
 print("=" * 60)
 
 ENTRY_TF = CONFIG["system"].get("entry_timeframe", "15m")
@@ -715,7 +715,7 @@ if __name__ == "__main__":
 
     print("\n🚀 Bot Started.")
     print(f"🕖 Watchlist refresh otomatis setiap hari jam 07:00")
-    print(f"💡 Tip: jalankan dengan BOT_DEBUG=true untuk verbose output\n")
+    print(f"💡 Tip: set \"debug\": true di config.json untuk verbose output\n")
     while True:
         schedule.run_pending()
         time.sleep(1)

@@ -126,9 +126,8 @@ cp config.example.json config.json
 python main.py
 
 # (Opsional) Mode verbose untuk debugging
-BOT_DEBUG=true python main.py          # Linux/macOS
-set BOT_DEBUG=true && python main.py   # Windows CMD
-$env:BOT_DEBUG="true"; python main.py  # Windows PowerShell
+# Set "debug": true di config.json, lalu:
+python main.py
 ```
 
 Bot akan otomatis:
@@ -286,7 +285,7 @@ Bot mendengarkan command via long polling di daemon thread terpisah. Hanya `tele
 - **File log:** `data/bot.log` — `RotatingFileHandler` maks 5 MB, 3 backup otomatis
 - **Named logger:** setiap module punya logger sendiri (`Main`, `Exchange`, `SMC`, `Quant`, `Patterns`, `Derivatives`, `PaperTrader`, `TelegramBot`, `TelegramCmd`)
 - **Filter breakdown:** setiap scan mencetak distribusi rejection per filter ke console
-- **Debug mode:** `BOT_DEBUG=true` mengaktifkan verbose output + traceback penuh
+- **Debug mode:** set `"debug": true` di `config.json` untuk verbose output + traceback penuh
 - **Step tracking:** exception pada `analyze_ticker` mencatat step terakhir sebelum error
 
 Contoh output filter breakdown:
@@ -329,7 +328,6 @@ ccxt>=4.3.0           # Bybit exchange client (REST)
 pybit>=5.6.0          # WebSocket support untuk auto_trade mode
 schedule>=1.2.0       # Job scheduler (scan loop)
 requests>=2.31.0      # HTTP Telegram API
-python-dotenv>=1.0.0
 pytz>=2024.1          # Timezone handling
 
 pandas>=2.0.0

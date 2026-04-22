@@ -475,7 +475,7 @@ if __name__ == "__main__":
     # ─── Standalone logging (tidak di-import oleh main.py) ─────────────────
     import os, sys
     os.makedirs("data", exist_ok=True)
-    LOG_LEVEL = logging.DEBUG if os.getenv("BOT_DEBUG", "").lower() == "true" else logging.INFO
+    LOG_LEVEL = logging.DEBUG if CONFIG.get("debug", False) else logging.INFO
     logging.basicConfig(
         level=LOG_LEVEL,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
