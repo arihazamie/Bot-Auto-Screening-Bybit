@@ -1,8 +1,33 @@
+# ── Secrets & Config (JANGAN COMMIT) ─────────────────────────────
 .env
+.env.local
+.env.*.local
 config.json
-bot_env/*
-*__pycache__/*\
-.venv
-venv
-data/
+
+# ── Virtual Environment ───────────────────────────────────────────
+.venv/
+venv/
+bot_env/
+env/
+
+# ── Python cache ──────────────────────────────────────────────────
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Bot runtime data ──────────────────────────────────────────────
+data/
+
+# ── Logs ──────────────────────────────────────────────────────────
+*.log
+*.log.*
+
+# ── OS / Editor ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

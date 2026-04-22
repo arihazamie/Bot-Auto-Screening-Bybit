@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analisis Bot Auto Screening Bybit</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;500;600;700;800&display=swap');
+
+  :root {
+    --bg: #0a0c0f;
+    --bg2: #0f1216;
+    --bg3: #141820;
+    --border: #1e2530;
+    --accent: #00d4aa;
+    --accent2: #ff4757;
+    --accent3: #ffa502;
+    --accent4: #3742fa;
+    --accent5: #7bed9f;
+    --text: #e8eaf0;
+    --text2: #8892a4;
+    --text3: #5a6477;
+    --critical: #ff4757;
+    --warning: #ffa502;
+    --good: #2ed573;
+    --info: #1e90ff;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Syne', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ── Grid noise overlay ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      radial-gradient(circle at 20% 50%, rgba(0,212,170,0.03) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, rgba(55,66,250,0.04) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrapper { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+  /* ── Header ── */
+  header {
+    padding: 60px 0 40px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 48px;
+  }
+  .header-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  header h1 {
+    font-size: clamp(28px, 4vw, 44px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    margin-bottom: 16px;
+  }
+  header h1 span { color: var(--accent); }
+  .header-meta {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+  }
+  .meta-item {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--text2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .meta-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; }
+
+  /* ── Score summary ── */
+  .score-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 48px;
+  }
+  .score-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .score-card:hover { border-color: var(--accent); }
+  .score-num {
+    font-family: 'Space Mono', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .score-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; }
+  .s-good  { color: var(--good); }
+  .s-warn  { color: var(--warning); }
+  .s-crit  { color: var(--critical); }
+  .s-info  { color: var(--info); }
+  .s-acc   { color: var(--accent); }
+
+  /* ── Section ── */
+  .section { margin-bottom: 48px; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .section-title { font-size: 20px; font-weight: 700; }
+  .section-sub { font-size: 13px; color: var(--text2); margin-top: 2px; }
+
+  /* ── Finding cards ── */
+  .findings { display: flex; flex-direction: column; gap: 10px; }
+  .finding {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    padding: 16px 18px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: start;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .finding:hover { background: var(--bg3); }
+  .finding.critical { border-left-color: var(--critical); }
+  .finding.warning  { border-left-color: var(--warning); }
+  .finding.good     { border-left-color: var(--good); }
+  .finding.info     { border-left-color: var(--info); }
+
+  .finding-icon { font-size: 18px; margin-top: 1px; }
+  .finding-body h4 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .finding-body p  { font-size: 13px; color: var(--text2); line-height: 1.5; }
+
+  .badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    font-weight: 700;
+  }
+  .badge-crit { background: rgba(255,71,87,0.15); color: var(--critical); border: 1px solid rgba(255,71,87,0.3); }
+  .badge-warn { background: rgba(255,165,2,0.15); color: var(--warning); border: 1px solid rgba(255,165,2,0.3); }
+  .badge-good { background: rgba(46,213,115,0.15); color: var(--good); border: 1px solid rgba(46,213,115,0.3); }
+  .badge-info { background: rgba(30,144,255,0.15); color: var(--info); border: 1px solid rgba(30,144,255,0.3); }
+
+  /* ── Code block ── */
+  .code-block {
+    background: #060809;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 10px 0;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+    overflow-x: auto;
+    line-height: 1.8;
+  }
+  .code-block .comment { color: var(--text3); }
+  .code-block .kw      { color: var(--accent4); }
+  .code-block .str     { color: var(--accent5); }
+  .code-block .fn      { color: var(--accent); }
+
+  /* ── Two-column reco ── */
+  .reco-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media(max-width:640px){ .reco-grid { grid-template-columns: 1fr; } }
+
+  .reco-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .reco-card h4 {
+    font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .reco-card ul { padding-left: 16px; }
+  .reco-card li { font-size: 13px; color: var(--text2); margin-bottom: 6px; line-height: 1.5; }
+  .reco-card li strong { color: var(--text); }
+
+  /* ── Priority table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead tr { border-bottom: 2px solid var(--border); }
+  thead th { text-align: left; padding: 10px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text2); }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+  tbody tr:hover { background: var(--bg2); }
+  tbody td { padding: 12px; color: var(--text2); vertical-align: top; }
+  tbody td:first-child { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text); }
+  .pri-high { color: var(--critical) !important; font-weight: 700; }
+  .pri-med  { color: var(--warning) !important; font-weight: 700; }
+  .pri-low  { color: var(--good) !important; font-weight: 700; }
+
+  /* ── Flow diagram ── */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    padding: 20px 0;
+    flex-wrap: nowrap;
+  }
+  .flow-step {
+    flex-shrink: 0;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    text-align: center;
+    min-width: 100px;
+  }
+  .flow-step .fs-num { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--accent); margin-bottom: 4px; }
+  .flow-step .fs-name { font-size: 11px; font-weight: 600; }
+  .flow-arrow { flex-shrink: 0; color: var(--text3); padding: 0 6px; font-size: 18px; }
+
+  /* ── Progress bar ── */
+  .prog-row { margin-bottom: 14px; }
+  .prog-label { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 13px; }
+  .prog-label span:last-child { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--text2); }
+  .prog-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .prog-fill  { height: 100%; border-radius: 3px; transition: width 1s ease; }
+
+  /* ── Callout ── */
+  .callout {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-size: 13px;
+    color: var(--text2);
+  }
+  .callout strong { color: var(--text); }
+  .callout.danger { border-left-color: var(--critical); }
+  .callout.warn   { border-left-color: var(--warning); }
+
+  /* ── Footer ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 32px;
+    margin-top: 64px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  footer .ft-left { font-size: 13px; color: var(--text3); }
+  footer .ft-right { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--text3); }
+
+  /* icon bg colors */
+  .ic-sec   { background: rgba(255,71,87,0.12); }
+  .ic-arch  { background: rgba(55,66,250,0.12); }
+  .ic-db    { background: rgba(255,165,2,0.12); }
+  .ic-strat { background: rgba(0,212,170,0.12); }
+  .ic-risk  { background: rgba(255,71,87,0.10); }
+  .ic-perf  { background: rgba(30,144,255,0.12); }
+  .ic-code  { background: rgba(123,237,159,0.10); }
+  .ic-tg    { background: rgba(30,144,255,0.10); }
+  .ic-dep   { background: rgba(55,66,250,0.10); }
+  .ic-test  { background: rgba(255,165,2,0.10); }
+
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--text2);
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- ── HEADER ── -->
+  <header>
+    <div class="header-tag">▸ Code Review &amp; Analysis Report</div>
+    <h1>Bot Auto Screening <span>Bybit</span><br>— Analisis Lengkap</h1>
+    <div class="header-meta">
+      <span class="meta-item"><span class="meta-dot"></span> 24 Files · ~224KB source</span>
+      <span class="meta-item"><span class="meta-dot"></span> Python 3.10+</span>
+      <span class="meta-item"><span class="meta-dot"></span> CCXT · pandas_ta · scipy · Telegram</span>
+      <span class="meta-item"><span class="meta-dot"></span> Paper + Auto Trade Mode</span>
+    </div>
+    <div class="tag-row">
+      <span class="tag">main.py</span>
+      <span class="tag">exchange.py</span>
+      <span class="tag">smc.py</span>
+      <span class="tag">paper_trader.py</span>
+      <span class="tag">database.py</span>
+      <span class="tag">quant.py</span>
+      <span class="tag">patterns.py</span>
+      <span class="tag">technicals.py</span>
+      <span class="tag">derivatives.py</span>
+      <span class="tag">telegram_bot.py</span>
+      <span class="tag">watchlist.py</span>
+      <span class="tag">config_loader.py</span>
+    </div>
+  </header>
+
+  <!-- ── SCORE SUMMARY ── -->
+  <div class="score-grid">
+    <div class="score-card">
+      <div class="score-num s-good">76</div>
+      <div class="score-label">Overall Score /100</div>
+    </div>
+    <div class="score-card">
+      <div class="score-num s-crit">3</div>
+      <div class="score-label">Kritis / High Risk</div>
+    </div>
+    <div class="score-card">
+      <div class="score-num s-warn">9</div>
+      <div class="score-label">Perlu Perbaikan</div>
+    </div>
+    <div class="score-card">
+      <div class="score-num s-acc">14</div>
+      <div class="score-label">Hal Positif</div>
+    </div>
+    <div class="score-card">
+      <div class="score-num s-info">7</div>
+      <div class="score-label">Area Analisis</div>
+    </div>
+  </div>
+
+  <!-- ── ALUR ANALISA ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-arch">🗺️</div>
+      <div>
+        <div class="section-title">Alur Kerja Bot (13 Langkah Filter)</div>
+        <div class="section-sub">Pipeline analisis symbol per scan cycle</div>
+      </div>
+    </div>
+    <div class="flow">
+      <div class="flow-step"><div class="fs-num">#1</div><div class="fs-name">Watchlist</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#2</div><div class="fs-name">BTC Bias</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#3</div><div class="fs-name">OHLCV Fetch</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#4</div><div class="fs-name">Technicals</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#5</div><div class="fs-name">Pattern</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#6</div><div class="fs-name">MTF Align</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#7</div><div class="fs-name">SMC</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#8</div><div class="fs-name">Quant</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#9</div><div class="fs-name">Derivatives</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#10</div><div class="fs-name">Entry QA</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#11</div><div class="fs-name">R:R Check</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#12</div><div class="fs-name">Signal</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="fs-num">#13</div><div class="fs-name">Telegram</div></div>
+    </div>
+  </div>
+
+  <!-- ── KUALITAS KODE ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-code">✅</div>
+      <div>
+        <div class="section-title">1. Kualitas Kode — Hal Positif</div>
+        <div class="section-sub">Yang sudah diimplementasikan dengan baik</div>
+      </div>
+    </div>
+    <div class="findings">
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Retry Logic dengan Exponential Backoff (exchange.py)</h4>
+          <p>Decorator <code>_with_retry()</code> menangani RateLimitExceeded, NetworkError, dan RequestTimeout secara otomatis dengan delay 1s → 2s → 4s. Pemisahan antara "retryable errors" dan "fatal errors" (BadSymbol, AuthError) sudah tepat.</p>
+        </div>
+        <span class="badge badge-good">Best Practice</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Atomic File Write di database.py</h4>
+          <p>Menggunakan pola <code>tempfile → fsync → os.replace()</code> sehingga file tidak pernah korup saat proses crash di tengah penulisan. Auto-repair jika file JSON rusak juga sudah ada.</p>
+        </div>
+        <span class="badge badge-good">Solid</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>OHLCV Cache + Leverage Cache dengan TTL</h4>
+          <p>Cache 13 menit untuk OHLCV dan 6 jam untuk leverage sangat tepat. Thread-safe dengan <code>threading.Lock()</code> dan double-check locking pattern mencegah thundering herd pada cache leverage.</p>
+        </div>
+        <span class="badge badge-good">Efisien</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>SMC Pipeline Lengkap (smc.py)</h4>
+          <p>Implementasi Market Structure (HH/HL/LH/LL), BOS/CHoCH, Fresh Order Blocks dengan mitigasi filter, Fair Value Gaps unmitigated, dan Liquidity Sweep. Mitigation tracking pada OB sangat baik untuk menghindari sinyal stale.</p>
+        </div>
+        <span class="badge badge-good">Komprehensif</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Paper Trader dengan Partial TP yang Akurat</h4>
+          <p>Rumus PnL sudah benar: <code>quantity = (balance × risk% × leverage) / entry</code>. Partial TP (40%/30%/30%), trailing SL ke breakeven dan TP1, serta cascade TP detection semuanya implementasi yang solid.</p>
+        </div>
+        <span class="badge badge-good">Akurat</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Config Validator di config_loader.py</h4>
+          <p>Validasi tipe data, range, dan key wajib dengan pesan error yang jelas. Fallback kirim error ke Telegram jika token sudah tersedia saat startup gagal.</p>
+        </div>
+        <span class="badge badge-good">UX Bagus</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Volume Confirmation &amp; Valid Pole di patterns.py</h4>
+          <p>Pattern breakout (triangle, rectangle) memerlukan volume surge >1.2× periode sebelumnya. Flag pattern memerlukan pole yang valid (impulse ≥3%). Ini mengurangi false signals secara signifikan.</p>
+        </div>
+        <span class="badge badge-good">Anti FP</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Multi-Timeframe (MTF) Alignment</h4>
+          <p>Trend pada 1H (Supertrend ATR 10/3.5) dikonfirmasi dengan signal 15M. Long signal direject jika trend 1H Bearish, Short signal direject jika 1H Bullish. Mencegah trading counter-trend.</p>
+        </div>
+        <span class="badge badge-good">Risk Filter</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Daily Guard: Max Loss, Max Profit, Max Trades</h4>
+          <p>Tiga guard harian berjalan sebelum setiap scan. Kombinasi ini melindungi akun dari overtrading dan drawdown beruntun dalam satu hari.</p>
+        </div>
+        <span class="badge badge-good">Risk Mgmt</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Filter Breakdown Logging yang Informatif</h4>
+          <p>Setiap akhir scan mencetak breakdown berapa pair yang direject di setiap filter dengan progress bar ASCII dan persentase. Sangat membantu untuk debugging dan tuning parameter.</p>
+        </div>
+        <span class="badge badge-good">Debug Friendly</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Real Order Book OBI di quant.py</h4>
+          <p>Order Book Imbalance dihitung dari 10 level bid/ask riil (bukan dari ticker bidVolume yang sering 0 di Bybit). Nilai [-1, +1] memberikan sinyal tekanan beli/jual yang lebih akurat.</p>
+        </div>
+        <span class="badge badge-good">Data Akurat</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Symbol Normalization Otomatis</h4>
+          <p>Konversi <code>BTCUSDT → BTC/USDT:USDT</code> dan <code>BTC/USDT → BTC/USDT:USDT</code> secara otomatis dengan caching hasil, menghindari BadSymbol error.</p>
+        </div>
+        <span class="badge badge-good">Robust</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Windows UTF-8 Fix</h4>
+          <p>Force UTF-8 pada stdout/stderr di Windows mencegah crash <code>UnicodeEncodeError cp1252</code> saat emoji dicetak ke terminal.</p>
+        </div>
+        <span class="badge badge-good">Cross-Platform</span>
+      </div>
+      <div class="finding good">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>Connection Pool Enlargement</h4>
+          <p>HTTPAdapter dengan <code>pool_connections=30, pool_maxsize=30</code> mencegah "connection pool is full" saat 20 thread berjalan paralel, yang merupakan masalah umum pada bot multi-thread.</p>
+        </div>
+        <span class="badge badge-good">Threading</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MASALAH KRITIS ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-sec">🔴</div>
+      <div>
+        <div class="section-title">2. Masalah Kritis (HARUS Diperbaiki)</div>
+        <div class="section-sub">Risiko tinggi terhadap keamanan, keandalan, atau kehilangan modal</div>
+      </div>
+    </div>
+    <div class="findings">
+      <div class="finding good" style="border:1px solid rgba(46,213,115,0.4);border-left:3px solid var(--good)">
+        <span class="finding-icon">✅</span>
+        <div class="finding-body">
+          <h4>✅ FIXED — API Key & Secret Dipindahkan ke Environment Variables</h4>
+          <p>Secrets (<code>BYBIT_KEY</code>, <code>BYBIT_SECRET</code>, <code>TELEGRAM_BOT_TOKEN</code>, <code>TELEGRAM_CHAT_ID</code>) kini dibaca dari <code>.env</code> dengan <strong>priority: env var &gt; config.json</strong>. File <code>config.example.json</code> dikosongkan dari hardcoded credentials. File <code>.env</code> terlindungi dari Git via <code>.gitignore</code>.</p>
+          <div style="margin-top:10px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+              <span class="badge badge-good">config_loader.py diupdate</span>
+              <span class="badge badge-good">.env.example dibuat</span>
+              <span class="badge badge-good">config.example.json dibersihkan</span>
+              <span class="badge badge-good">.gitignore diperkuat</span>
+            </div>
+          </div>
+          <div class="code-block">
+<span class="comment"># .env (di-gitignore, TIDAK pernah di-commit)</span><br>
+<span class="fn">TELEGRAM_BOT_TOKEN</span>=123456:ABCdef...<br>
+<span class="fn">TELEGRAM_CHAT_ID</span>=-100123456789<br>
+<span class="fn">BYBIT_KEY</span>=xxxxxxxxxxx&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment"># hanya jika auto_trade=true</span><br>
+<span class="fn">BYBIT_SECRET</span>=xxxxxxxxxxx<br><br>
+<span class="comment"># config.example.json — sekarang api section kosong (aman di-commit)</span><br>
+{ <span class="str">"api"</span>: { <span class="str">"bybit_key"</span>: <span class="str">""</span>, <span class="str">"telegram_bot_token"</span>: <span class="str">""</span> } }<br><br>
+<span class="comment"># config_loader.py — _apply_env_secrets() menimpa config.json</span><br>
+<span class="kw">for</span> env_name, cfg_key, label <span class="kw">in</span> _SECRET_ENV_MAP:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;env_val = os.getenv(env_name, <span class="str">""</span>).strip()<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">if</span> env_val:  config[<span class="str">"api"</span>][cfg_key] = env_val  <span class="comment"># env wins</span>
+          </div>
+          <div style="margin-top:10px;padding:10px 14px;background:rgba(46,213,115,0.05);border-radius:6px;border:1px solid rgba(46,213,115,0.2)">
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600">Cara Setup (3 Langkah):</div>
+            <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--text2);line-height:2">
+              <span style="color:var(--accent)">$</span> cp .env.example .env<br>
+              <span style="color:var(--accent)">$</span> nano .env &nbsp;&nbsp;<span style="color:var(--text3)"># isi TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, dst</span><br>
+              <span style="color:var(--accent)">$</span> python main.py
+            </div>
+          </div>
+        </div>
+        <span class="badge badge-good">FIXED ✓</span>
+      </div>
+      <div class="finding critical">
+        <span class="finding-icon">💾</span>
+        <div class="finding-body">
+          <h4>JSON File Storage Tidak Scalable & Rawan Race Condition</h4>
+          <p>Seluruh storage menggunakan file JSON (signals.json, active_trades.json, dll). Satu global lock <code>_lock</code> dipakai untuk semua operasi. Saat thread count tinggi, ini menjadi bottleneck. Seiring waktu, file bisa tumbuh tak terbatas (tidak ada cleanup). Tidak ada query/index — setiap lookup harus baca seluruh file.</p>
+          <div class="code-block"><span class="comment"># ✅ Migrasi ke SQLite (minimal effort, sudah built-in Python):</span><br><span class="kw">import</span> sqlite3<br>conn = sqlite3.connect(<span class="str">'data/bot.db'</span>, check_same_thread=<span class="kw">False</span>)<br><span class="comment"># Gunakan WAL mode untuk concurrency yang lebih baik</span><br>conn.execute(<span class="str">"PRAGMA journal_mode=WAL"</span>)</div>
+        </div>
+        <span class="badge badge-crit">KRITIS</span>
+      </div>
+      <div class="finding critical">
+        <span class="finding-icon">⚡</span>
+        <div class="finding-body">
+          <h4>technicals.py Memanggil df.dropna(inplace=True) Secara Langsung</h4>
+          <p>Fungsi <code>get_technicals()</code> memanggil <code>df.dropna(inplace=True)</code> yang memodifikasi DataFrame secara in-place dan mengembalikan nilai. Ini mengubah panjang data secara tak terduga, berpotensi menyebabkan index out-of-bounds di modul lain yang mengasumsikan panjang DataFrame konstan. Dengan pandas baru, <code>inplace</code> juga menghasilkan SettingWithCopyWarning.</p>
+          <div class="code-block"><span class="comment"># ❌ Berbahaya:</span><br>df.dropna(inplace=<span class="kw">True</span>)<br><span class="kw">return</span> df<br><br><span class="comment"># ✅ Aman:</span><br><span class="kw">return</span> df.dropna().reset_index(drop=<span class="kw">True</span>)</div>
+        </div>
+        <span class="badge badge-crit">KRITIS</span>
+      </div>
+      <div class="finding critical">
+        <span class="finding-icon">📦</span>
+        <div class="finding-body">
+          <h4>Tidak Ada Cleanup Data Lama → Memory/Disk Leak</h4>
+          <p>Tidak ada mekanisme untuk membersihkan sinyal lama, trade yang sudah closed, atau log yang tumbuh. File <code>signals.json</code> dan <code>active_trades.json</code> akan terus bertambah. Setelah berbulan-bulan, setiap operasi database akan semakin lambat karena harus membaca/menulis seluruh file.</p>
+        </div>
+        <span class="badge badge-crit">KRITIS</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MASALAH SEDANG ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-db">🟡</div>
+      <div>
+        <div class="section-title">3. Masalah Sedang (Sangat Disarankan Diperbaiki)</div>
+        <div class="section-sub">Berpengaruh pada kualitas sinyal, stabilitas, dan maintainability</div>
+      </div>
+    </div>
+    <div class="findings">
+      <div class="finding warning">
+        <span class="finding-icon">📐</span>
+        <div class="finding-body">
+          <h4>Entry Price Calculation Menggunakan Fib 50-61.8% pada Swing Range</h4>
+          <p>Entry dihitung sebagai rata-rata antara <code>swing_high - range×0.5</code> dan <code>swing_high - range×0.618</code>. Ini adalah estimasi zone retracement, bukan harga aktual market. Bot sering menghasilkan entry yang sudah lewat atau terlalu jauh dari harga saat ini, menyebabkan banyak signal direject di filter <code>max_entry_drift_pct</code>. Lebih baik gunakan harga bid/ask saat ini sebagai entry point.</p>
+        </div>
+        <span class="badge badge-warn">Trading Logic</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🎯</span>
+        <div class="finding-body">
+          <h4>TP Split Tidak Konsisten Antara Config dan Paper Trader</h4>
+          <p>Config mendefinisikan <code>tp_split: [0.4, 0.3, 0.3]</code> (TP1=40%, TP2=30%, TP3=30%) tapi di paper_trader.py variabelnya dinamai <code>TP1_PCT, TP2_PCT, TP3_PCT</code> dan dipakai sebagai persentase partial close. Total 40+30+30=100% benar, tapi labelling di config membingungkan (0.4 di TP1 seharusnya adalah porsi yang DIJUAL di TP1, bukan target TP1).</p>
+        </div>
+        <span class="badge badge-warn">Kebingungan</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🧵</span>
+        <div class="finding-body">
+          <h4>analyze_ticker() Terlalu Panjang (200+ Baris, 13 Step dalam Satu Fungsi)</h4>
+          <p>Fungsi <code>analyze_ticker()</code> di main.py melakukan 13 langkah analisis dalam satu fungsi monolitik. Ini menyulitkan testing, debugging, dan penambahan fitur baru. Setiap step seharusnya menjadi fungsi tersendiri dengan return type yang eksplisit.</p>
+        </div>
+        <span class="badge badge-warn">Maintainability</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">📊</span>
+        <div class="finding-body">
+          <h4>BTC Bias Hanya Menggunakan EMA 13/21 — Terlalu Sederhana</h4>
+          <p>BTC bias ditentukan hanya dari perbandingan EMA13 vs EMA21 pada timeframe 1H. Ini memberikan banyak false signals di pasar sideways. Sebaiknya dikombinasikan dengan ADX (konfirmasi trend strength) atau minimal tambahkan filter bahwa harga harus di atas/bawah kedua EMA tersebut.</p>
+        </div>
+        <span class="badge badge-warn">Signal Quality</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">⚖️</span>
+        <div class="finding-body">
+          <h4>use_max_leverage: true Bisa Sangat Berbahaya di Auto Trade Mode</h4>
+          <p>Config default menggunakan max leverage yang diizinkan Bybit per coin. Untuk BTC ini 100x, ETH 100x, altcoin bisa 25-75x. Dengan risk_percent=1%, leverage 100x berarti 1% pergerakan harga = 100% PnL/loss dari margin. Ini sangat agresif untuk bot otomatis. Seharusnya ada hard cap leverage (misal max 20x).</p>
+        </div>
+        <span class="badge badge-warn">Risk</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🔄</span>
+        <div class="finding-body">
+          <h4>_SYMBOL_CACHE adalah Class Variable (Shared Across Instances)</h4>
+          <p><code>_SYMBOL_CACHE: dict[str, str] = {}</code> dideklarasikan sebagai class variable di BybitClient. Jika ada lebih dari satu instance BybitClient (misalnya dalam testing), cache ini dibagikan, yang bisa menyebabkan perilaku tak terduga. Seharusnya menjadi instance variable di <code>__init__</code>.</p>
+        </div>
+        <span class="badge badge-warn">Bug Potential</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🌐</span>
+        <div class="finding-body">
+          <h4>Tidak Ada Rate Limiting pada Telegram Command Handler</h4>
+          <p>Telegram command listener tidak memiliki rate limiting atau autentikasi pengirim. Siapapun yang tahu chat_id bot bisa mengirim perintah <code>/pause</code>, <code>/resume</code>, dll. Ini bisa dieksploitasi untuk menghentikan bot trading.</p>
+        </div>
+        <span class="badge badge-warn">Security</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🔤</span>
+        <div class="finding-body">
+          <h4>Komentar Campuran Indonesia-Inggris</h4>
+          <p>Komentar, docstring, dan log messages menggunakan campuran Bahasa Indonesia dan Inggris yang tidak konsisten. Ini mempersulit kolaborasi dengan developer internasional dan membingungkan AI tools. Pilih satu bahasa dan konsistenlah.</p>
+        </div>
+        <span class="badge badge-warn">Style</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🧪</span>
+        <div class="finding-body">
+          <h4>Tidak Ada Unit Test atau Integration Test</h4>
+          <p>Tidak ada file test (pytest, unittest) sama sekali. Untuk bot trading yang mengelola uang riil, minimal harus ada unit test untuk: PnL calculation, SMC logic, pattern detection, config validation, dan ATR/SL calculation.</p>
+        </div>
+        <span class="badge badge-warn">Testing</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SARAN STRATEGI ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-strat">📈</div>
+      <div>
+        <div class="section-title">4. Saran Strategi Trading</div>
+        <div class="section-sub">Peningkatan kualitas sinyal dan akurasi entry</div>
+      </div>
+    </div>
+    <div class="reco-grid">
+      <div class="reco-card">
+        <h4><span style="color:var(--accent)">🎯</span> Entry Point</h4>
+        <ul>
+          <li><strong>Gunakan current bid/ask</strong> sebagai entry utama, bukan kalkulasi fib yang sering meleset</li>
+          <li><strong>Limit order zone</strong>: Set pending order di range 0.1–0.3% dari harga saat ini, bukan 3% drift</li>
+          <li><strong>Tambahkan konfirmasi candle</strong>: Tunggu satu candle close setelah pattern terbentuk sebelum entry</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4><span style="color:var(--warning)">⚠️</span> Stop Loss</h4>
+        <ul>
+          <li><strong>ATR × 1.5 sudah tepat</strong>, tapi tambahkan floor minimum: SL minimum 0.5% dari entry</li>
+          <li><strong>Aktifkan require_sl_beyond_swing</strong>: Di config default ini false, seharusnya true</li>
+          <li><strong>Hindari round numbers</strong>: Tambahkan buffer 0.1 ATR di luar swing untuk menghindari stop hunt</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4><span style="color:var(--good)">📉</span> Divergence Detection</h4>
+        <ul>
+          <li><strong>StochRSI divergence</strong> saat ini hanya pakai indeks pivot terakhir — tambahkan look-forward confirmation</li>
+          <li><strong>MACD histogram divergence</strong> sudah dihitung tapi tidak dipakai dalam scoring — integrasikan</li>
+          <li><strong>RSI divergence</strong> (14) sebaiknya ditambahkan sebagai secondary confirmation</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4><span style="color:var(--info)">🏦</span> SMC Enhancement</h4>
+        <ul>
+          <li><strong>Premium/Discount zones</strong>: Cek apakah entry berada di discount (Long) atau premium (Short) menggunakan range 50% level</li>
+          <li><strong>Inducement detection</strong>: Identifikasi liquidity inducement sebelum OB untuk entry yang lebih presisi</li>
+          <li><strong>Multi-timeframe OB</strong>: Cek OB pada 4H dan 1D juga untuk confluence yang lebih kuat</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4><span style="color:var(--accent2)">🔢</span> Scoring System</h4>
+        <ul>
+          <li><strong>Bobot scoring tidak merata</strong>: SMC bisa max 10+, quant hanya 2-4. Normalisasi bobot agar lebih seimbang</li>
+          <li><strong>Total score threshold</strong>: Tambahkan filter minimum total score sebelum signal dikirim</li>
+          <li><strong>Score historis</strong>: Track akurasi setiap pattern/score combination untuk auto-tuning threshold</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4><span style="color:var(--accent5)">📊</span> Market Filter Tambahan</h4>
+        <ul>
+          <li><strong>Fear &amp; Greed Index</strong>: Hindari Long saat Extreme Fear, hindari Short saat Extreme Greed</li>
+          <li><strong>Open Interest change</strong>: Rising OI + Rising Price = lebih kuat untuk Long</li>
+          <li><strong>Session filter</strong>: Saat ini hanya UTC hour window — tambahkan volatility filter berdasarkan ATR percentile</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SARAN RISK MANAGEMENT ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-risk">🛡️</div>
+      <div>
+        <div class="section-title">5. Manajemen Risiko — Rekomendasi</div>
+        <div class="section-sub">Perlindungan modal dan position sizing</div>
+      </div>
+    </div>
+
+    <div class="callout danger">
+      <strong>⚠️ Perhatian Penting:</strong> Config default <code>use_max_leverage: true</code> dengan Bybit max 100x untuk BTC/ETH sangat agresif. Bahkan dengan risk_percent=1%, leverage 100x berarti liquidasi terjadi saat harga bergerak hanya 1% berlawanan. Untuk mode auto trade, <strong>sangat disarankan</strong> membatasi leverage maksimum ke 10-20x.
+    </div>
+
+    <div class="findings">
+      <div class="finding warning">
+        <span class="finding-icon">📏</span>
+        <div class="finding-body">
+          <h4>Tambahkan Hard Cap Leverage</h4>
+          <p>Di <code>exchange.py</code> fungsi <code>fetch_max_leverage()</code>, tambahkan parameter <code>max_allowed: int = 20</code> dan kembalikan <code>min(fetched_leverage, max_allowed)</code>. Ini mencegah bot menggunakan leverage ekstrem meski Bybit memperbolehkannya.</p>
+          <div class="code-block"><span class="comment"># Saran implementasi:</span><br><span class="fn">MAX_LEVERAGE_CAP</span> = CONFIG[<span class="str">"risk"</span>].get(<span class="str">"max_leverage_cap"</span>, 20)<br>lev = <span class="fn">min</span>(fetched_lev, MAX_LEVERAGE_CAP)</div>
+        </div>
+        <span class="badge badge-warn">Risk Cap</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">💰</span>
+        <div class="finding-body">
+          <h4>Position Sizing Berbasis Volatilitas (ATR-Based)</h4>
+          <p>Saat ini risk_percent flat 1% untuk semua coin. Coin dengan volatilitas tinggi (ATR besar) seharusnya mendapat alokasi lebih kecil. Implementasikan: <code>adjusted_risk = risk_percent × (target_atr_pct / actual_atr_pct)</code> dengan batas min 0.5% dan max 2%.</p>
+        </div>
+        <span class="badge badge-warn">Position Sizing</span>
+      </div>
+      <div class="finding warning">
+        <span class="finding-icon">🔗</span>
+        <div class="finding-body">
+          <h4>Correlation Filter — Hindari Concentrated Risk</h4>
+          <p>Saat ini max_positions=3 tapi tidak ada cek korelasi. Bisa saja 3 posisi semuanya altcoin yang berkorelasi tinggi dengan BTC, sehingga saat BTC crash semua posisi kena SL bersamaan. Tambahkan filter: tidak boleh lebih dari 1 posisi dalam kategori yang sama (L1, DeFi, Meme, dll).</p>
+        </div>
+        <span class="badge badge-warn">Diversifikasi</span>
+      </div>
+      <div class="finding info">
+        <span class="finding-icon">📅</span>
+        <div class="finding-body">
+          <h4>Pending Trade Expiry sudah Ada — Tingkatkan dengan Market Condition Check</h4>
+          <p><code>pending_expire_hours: 3</code> sudah baik. Tambahkan juga: jika volatilitas market berubah drastis sejak signal dibuat (ATR berubah >50%), cancel pending trade karena setup sudah tidak valid.</p>
+        </div>
+        <span class="badge badge-info">Enhancement</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SARAN PERFORMA ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-perf">⚡</div>
+      <div>
+        <div class="section-title">6. Performa &amp; Skalabilitas</div>
+        <div class="section-sub">Optimasi kecepatan scan dan penggunaan resource</div>
+      </div>
+    </div>
+
+    <div class="prog-row">
+      <div class="prog-label"><span>Threading Efficiency</span><span>20 threads / pair</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:78%;background:var(--good)"></div></div>
+    </div>
+    <div class="prog-row">
+      <div class="prog-label"><span>API Call Efficiency</span><span>OHLCV cache OK, tapi fetch_ticker masih per-symbol</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:55%;background:var(--warning)"></div></div>
+    </div>
+    <div class="prog-row">
+      <div class="prog-label"><span>Database Performance</span><span>JSON linear scan, tanpa index</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:30%;background:var(--critical)"></div></div>
+    </div>
+    <div class="prog-row">
+      <div class="prog-label"><span>Memory Usage</span><span>Tidak ada batas, cache bisa tumbuh tak terbatas</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:45%;background:var(--warning)"></div></div>
+    </div>
+    <div class="prog-row">
+      <div class="prog-label"><span>Error Recovery</span><span>Retry logic baik, tapi tidak ada circuit breaker</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:65%;background:var(--good)"></div></div>
+    </div>
+
+    <div class="reco-grid" style="margin-top:16px">
+      <div class="reco-card">
+        <h4><span style="color:var(--accent)">🚀</span> Optimasi API Calls</h4>
+        <ul>
+          <li><strong>Gunakan fetch_tickers() bulk</strong> untuk ticker screening awal sebelum OHLCV fetch. Satu request untuk 100 symbols vs 100 requests terpisah</li>
+          <li><strong>Pre-filter berdasarkan volume</strong>: Reject pairs dengan volume 24H < threshold sebelum fetch OHLCV</li>
+          <li><strong>Batch order book</strong>: Saat ini OB di-fetch satu per satu, padahal bisa skip jika symbol sudah direject di step sebelumnya</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4><span style="color:var(--info)">💾</span> Memory Management</h4>
+        <ul>
+          <li><strong>Batas ukuran OHLCV cache</strong>: Tambahkan LRU eviction untuk max 200 entries agar tidak kehabisan RAM</li>
+          <li><strong>Clear DF columns setelah analisis</strong>: Kolom intermediary (delta, CVD, Vol_SMA) tidak perlu disimpan di return dict</li>
+          <li><strong>Jangan pass df ke dalam result dict</strong>: Di <code>analyze_ticker()</code> hasil <code>"df": df</code> disimpan tapi tampaknya tidak pernah dipakai</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SARAN DEPLOYMENT ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-dep">🐳</div>
+      <div>
+        <div class="section-title">7. Deployment &amp; Operasional</div>
+        <div class="section-sub">Cara menjalankan bot dengan aman dan stabil di produksi</div>
+      </div>
+    </div>
+    <div class="findings">
+      <div class="finding info">
+        <span class="finding-icon">🐳</span>
+        <div class="finding-body">
+          <h4>Tambahkan Dockerfile untuk Deployment Konsisten</h4>
+          <p>Saat ini tidak ada Dockerfile. Tanpanya, bot bisa berperilaku berbeda di Windows vs Linux karena perbedaan encoding, timezone, dan library versions. Docker juga memudahkan restart otomatis dan isolation.</p>
+          <div class="code-block"><span class="kw">FROM</span> python:3.11-slim<br><span class="kw">WORKDIR</span> /app<br><span class="kw">COPY</span> requirements.txt .<br><span class="kw">RUN</span> pip install -r requirements.txt<br><span class="kw">COPY</span> . .<br><span class="kw">ENV</span> TZ=Asia/Jakarta<br><span class="kw">CMD</span> ["python", "main.py"]</div>
+        </div>
+        <span class="badge badge-info">DevOps</span>
+      </div>
+      <div class="finding info">
+        <span class="finding-icon">⚙️</span>
+        <div class="finding-body">
+          <h4>Gunakan systemd atau supervisor untuk Process Management</h4>
+          <p>Saat ini bot harus dijalankan manual. Jika server restart atau bot crash, tidak ada yang me-restart otomatis. Gunakan <code>systemd service</code> di Linux atau <code>pm2</code> untuk auto-restart dengan exponential backoff.</p>
+        </div>
+        <span class="badge badge-info">Reliability</span>
+      </div>
+      <div class="finding info">
+        <span class="finding-icon">📊</span>
+        <div class="finding-body">
+          <h4>Tambahkan Health Check Endpoint (HTTP)</h4>
+          <p>Saat ini health check hanya dijalankan saat startup ke terminal. Tambahkan endpoint HTTP sederhana (<code>http://localhost:8080/health</code>) yang merespons 200 jika bot aktif, sehingga monitoring service (Uptime Robot, Grafana) bisa mengeceknya.</p>
+        </div>
+        <span class="badge badge-info">Monitoring</span>
+      </div>
+      <div class="finding info">
+        <span class="finding-icon">📂</span>
+        <div class="finding-body">
+          <h4>Tambahkan .gitignore yang Lebih Komprehensif</h4>
+          <p>File <code>.gitignore</code> ada tapi pastikan mencakup: <code>config.json</code>, <code>data/</code>, <code>*.log</code>, <code>.env</code>, <code>__pycache__/</code>. Jangan sampai API key atau data trading ter-commit ke repository.</p>
+          <div class="code-block"><span class="comment"># .gitignore WAJIB include:</span><br>config.json<br>.env<br>data/<br>*.log<br>__pycache__/</div>
+        </div>
+        <span class="badge badge-info">Security</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PRIORITY ROADMAP ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-arch">🗓️</div>
+      <div>
+        <div class="section-title">8. Priority Roadmap — Urutan Perbaikan</div>
+        <div class="section-sub">Dari yang paling mendesak ke yang bisa ditunda</div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Prioritas</th>
+          <th>Effort</th>
+          <th>Dampak</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="opacity:0.6">
+          <td><s>Pindahkan API keys ke .env (dotenv sudah di-import!)</s></td>
+          <td><span class="badge badge-good">✅ DONE</span></td>
+          <td><s>30 menit</s></td>
+          <td>Keamanan akun</td>
+        </tr>
+        <tr style="opacity:0.6">
+          <td><s>Tambahkan config.json &amp; .env ke .gitignore (perkuat rules)</s></td>
+          <td><span class="badge badge-good">✅ DONE</span></td>
+          <td><s>5 menit</s></td>
+          <td>Cegah key leak</td>
+        </tr>
+        <tr>
+          <td>Fix df.dropna(inplace=True) di technicals.py</td>
+          <td class="pri-high">🔴 SEKARANG</td>
+          <td>15 menit</td>
+          <td>Cegah IndexError</td>
+        </tr>
+        <tr>
+          <td>Tambahkan max_leverage_cap di config (max 20x)</td>
+          <td class="pri-high">🔴 SEKARANG</td>
+          <td>1 jam</td>
+          <td>Proteksi modal</td>
+        </tr>
+        <tr>
+          <td>Migrasi JSON storage ke SQLite</td>
+          <td class="pri-med">🟡 MINGGU INI</td>
+          <td>1–2 hari</td>
+          <td>Stabilitas jangka panjang</td>
+        </tr>
+        <tr>
+          <td>Tambahkan data cleanup / TTL untuk records lama</td>
+          <td class="pri-med">🟡 MINGGU INI</td>
+          <td>2–3 jam</td>
+          <td>Cegah disk full</td>
+        </tr>
+        <tr>
+          <td>Pindahkan _SYMBOL_CACHE ke instance variable</td>
+          <td class="pri-med">🟡 MINGGU INI</td>
+          <td>30 menit</td>
+          <td>Cegah shared-state bug</td>
+        </tr>
+        <tr>
+          <td>Tambahkan autentikasi sender di Telegram commands</td>
+          <td class="pri-med">🟡 MINGGU INI</td>
+          <td>2 jam</td>
+          <td>Keamanan kontrol bot</td>
+        </tr>
+        <tr>
+          <td>Refactor analyze_ticker() jadi fungsi-fungsi kecil</td>
+          <td class="pri-low">🟢 BULAN INI</td>
+          <td>1 hari</td>
+          <td>Maintainability</td>
+        </tr>
+        <tr>
+          <td>Tambahkan unit tests untuk PnL, SMC, Patterns</td>
+          <td class="pri-low">🟢 BULAN INI</td>
+          <td>2–3 hari</td>
+          <td>Confidence saat refactor</td>
+        </tr>
+        <tr>
+          <td>Tambahkan Dockerfile dan systemd service</td>
+          <td class="pri-low">🟢 BULAN INI</td>
+          <td>1 hari</td>
+          <td>Deployment reliability</td>
+        </tr>
+        <tr>
+          <td>Perbaiki BTC Bias (tambahkan ADX filter)</td>
+          <td class="pri-low">🟢 BULAN INI</td>
+          <td>2 jam</td>
+          <td>Kualitas sinyal</td>
+        </tr>
+        <tr>
+          <td>Implementasi correlation filter antar posisi</td>
+          <td class="pri-low">🟢 NANTI</td>
+          <td>1 hari</td>
+          <td>Portfolio diversifikasi</td>
+        </tr>
+        <tr>
+          <td>ATR-based dynamic position sizing</td>
+          <td class="pri-low">🟢 NANTI</td>
+          <td>1 hari</td>
+          <td>Risk optimization</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── RINGKASAN ── -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon ic-strat">📝</div>
+      <div>
+        <div class="section-title">9. Ringkasan Eksekutif</div>
+        <div class="section-sub">Kesimpulan keseluruhan dan rekomendasi utama</div>
+      </div>
+    </div>
+    <div class="callout">
+      <strong>Bot ini adalah proyek yang sangat ambisius dan sudah cukup matang.</strong> Pipeline analisis 13-step yang menggabungkan SMC, technicals, quant metrics, dan derivatives adalah desain yang komprehensif. Kode menunjukkan pemahaman yang baik tentang trading perpetual contracts, CCXT, dan Python async patterns.<br><br>
+      Namun ada <strong>4 masalah kritis</strong> yang harus diperbaiki <em>sebelum</em> menjalankan bot dengan uang riil: (1) keamanan API key, (2) skalabilitas database, (3) bug df.dropna inplace, dan (4) tidak adanya cleanup data lama. Perbaikan ini relatif cepat tapi dampaknya besar.<br><br>
+      Setelah masalah kritis teratasi, fokus berikutnya adalah kualitas sinyal: perbaiki kalkulasi entry price, kuatkan BTC bias filter, dan tambahkan hard cap leverage. Dengan perbaikan tersebut, bot ini memiliki fondasi yang solid untuk menjadi sistem screening yang andal.
+    </div>
+
+    <div class="reco-grid" style="margin-top:16px">
+      <div class="reco-card">
+        <h4 style="color:var(--good)">✅ Kekuatan Utama</h4>
+        <ul>
+          <li>SMC pipeline paling lengkap (OB, FVG, Liquidity Sweep, BOS/CHoCH)</li>
+          <li>Retry logic dan caching yang solid</li>
+          <li>Paper trader dengan PnL formula yang akurat dan partial TP</li>
+          <li>Filter berlapis yang mengurangi false signals secara signifikan</li>
+          <li>Telegram integration yang kaya fitur</li>
+        </ul>
+      </div>
+      <div class="reco-card">
+        <h4 style="color:var(--critical)">⚠️ Fokus Perbaikan</h4>
+        <ul>
+          <li><s style="color:var(--text3)">Keamanan credentials</s> <span class="badge badge-good" style="font-size:9px">✅ FIXED</span></li>
+          <li>Database skalabilitas (JSON → SQLite)</li>
+          <li>Hard cap leverage untuk proteksi modal</li>
+          <li>Unit testing untuk confidence</li>
+          <li>Refactor fungsi monolitik untuk maintainability</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="ft-left">Analisis dilakukan terhadap Bot-Auto-Screening-Bybit-main · 24 files · Python 3.10+</div>
+    <div class="ft-right">Generated: April 2026</div>
+  </footer>
+
+</div>
+</body>
+</html>

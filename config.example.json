@@ -1,13 +1,12 @@
 {
+  "_secrets_note": "Isi SEMUA secrets di file .env, bukan di sini. Lihat .env.example untuk format.",
   "auto_trade": false,
-
   "api": {
-    "bybit_key": "YOUR_BYBIT_API_KEY",
-    "bybit_secret": "YOUR_BYBIT_API_SECRET",
-    "telegram_bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
-    "telegram_chat_id": "YOUR_TELEGRAM_CHAT_ID"
+    "bybit_key": "",
+    "bybit_secret": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": ""
   },
-
   "system": {
     "timezone": "Asia/Jakarta",
     "max_threads": 20,
@@ -18,7 +17,6 @@
     "watchlist_top_n": 100,
     "active_hours_utc": [6, 22]
   },
-
   "risk": {
     "use_max_leverage": true,
     "target_leverage": 25,
@@ -33,7 +31,6 @@
     "atr_sl_length": 14,
     "paper_balance": 100.0
   },
-
   "setup": {
     "fib_entry_start": 0.5,
     "fib_entry_end": 0.618,
@@ -42,7 +39,6 @@
     "fib_tp_2": 1.618,
     "fib_tp_3": 2.618
   },
-
   "strategy": {
     "min_tech_score": 3,
     "min_quant_score": 3,
@@ -57,11 +53,9 @@
     "require_sl_beyond_swing": false,
     "sl_swing_buffer_atr": 0
   },
-
   "indicators": {
     "min_rvol": 1.5
   },
-
   "patterns": {
     "tolerance": 0.015,
     "double_top": true,
@@ -72,7 +66,6 @@
     "descending_triangle": true,
     "bullish_rectangle": true
   },
-
   "pattern_signals": {
     "double_bottom": "Long",
     "double_top": "Short",
