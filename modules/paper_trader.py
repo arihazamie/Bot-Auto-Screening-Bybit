@@ -43,7 +43,14 @@ from modules.database import (
 from modules.notifier import send_reply
 
 logger = logging.getLogger("PaperTrader")
-TP1_PCT, TP2_PCT, TP3_PCT = CONFIG["risk"].get("tp_split", [0.4, 0.3, 0.3])
+
+# FIX #2: Rename dari TP1_PCT → TP1_CLOSE_PCT untuk kejelasan.
+#
+# Masalah lama: nama TP1_PCT ambigu — bisa dibaca sebagai "target price TP1"
+# padahal artinya "porsi posisi yang DIJUAL saat TP1 hit".
+# Config tp_split: [0.4, 0.3, 0.3] = tutup 40% di TP1, 30% di TP2, 30% di TP3.
+# Total harus 100% (0.4 + 0.3 + 0.3 = 1.0).
+TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT = CONFIG["risk"].get("tp_split", [0.4, 0.3, 0.3])
 
 # ─── UI Helpers ───────────────────────────────────────────────────────────────
 
@@ -143,9 +150,9 @@ def _remaining_qty(qty: float, tp1_logged: bool, tp2_logged: bool) -> float:
     """
     remaining = qty
     if tp1_logged:
-        remaining -= qty * TP1_PCT
+        remaining -= qty * TP1_CLOSE_PCT
     if tp2_logged:
-        remaining -= qty * TP2_PCT
+        remaining -= qty * TP2_CLOSE_PCT
     return round(remaining, 8)
 
 
@@ -254,10 +261,10 @@ def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
     lev    = int(trade.get('leverage', 1))
     tg_id  = trade.get('telegram_msg_id')
 
-    partial_qty    = qty * TP1_PCT
+    partial_qty    = qty * TP1_CLOSE_PCT
     partial_pnl    = _calc_pnl(side, entry, tp1, partial_qty)
     full_margin    = _calc_margin(entry, qty, lev)
-    partial_margin = full_margin * TP1_PCT
+    partial_margin = full_margin * TP1_CLOSE_PCT
 
     # ✅ Balance update realtime
     new_balance = _apply_partial_balance(partial_pnl, "TP1", sym)
@@ -278,12 +285,12 @@ def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
         f"📌 <b>{sym}</b>  {_side_label(side)}\n"
         f"📈 TP1  <code>{_fp(tp1)}</code>  "
             f"<i>({_pct_price(entry, tp1)} dari entry)</i>\n\n"
-        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>({TP1_PCT*100:.0f}% posisi)</i>\n"
+        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>({TP1_CLOSE_PCT*100:.0f}% posisi)</i>\n"
         f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
             f"<i>(dari ${partial_margin:.2f})</i>\n"
         f"💼 Balance       <code>${new_balance:.2f}</code>\n"
         f"🔒 Stop → Breakeven @ <code>{_fp(entry)}</code>\n"
-        f"⏳ Holding {(1-TP1_PCT)*100:.0f}% ke TP2 / TP3{cascade_note}\n\n"
+        f"⏳ Holding {(1-TP1_CLOSE_PCT)*100:.0f}% ke TP2 / TP3{cascade_note}\n\n"
         f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
     )
     send_reply(msg, reply_to_message_id=tg_id)
@@ -306,10 +313,10 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
     lev    = int(trade.get('leverage', 1))
     tg_id  = trade.get('telegram_msg_id')
 
-    partial_qty    = qty * TP2_PCT
+    partial_qty    = qty * TP2_CLOSE_PCT
     partial_pnl    = _calc_pnl(side, entry, tp2, partial_qty)
     full_margin    = _calc_margin(entry, qty, lev)
-    partial_margin = full_margin * TP2_PCT
+    partial_margin = full_margin * TP2_CLOSE_PCT
 
     # ✅ Balance update realtime
     new_balance = _apply_partial_balance(partial_pnl, "TP2", sym)
@@ -331,12 +338,12 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
         f"📌 <b>{sym}</b>  {_side_label(side)}\n"
         f"📈 TP2  <code>{_fp(tp2)}</code>  "
             f"<i>({_pct_price(entry, tp2)} dari entry)</i>\n\n"
-        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>({TP2_PCT*100:.0f}% posisi)</i>\n"
+        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>({TP2_CLOSE_PCT*100:.0f}% posisi)</i>\n"
         f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
             f"<i>(dari ${partial_margin:.2f})</i>\n"
         f"💼 Balance       <code>${new_balance:.2f}</code>\n"
         f"🔒 Stop → TP1 @ <code>{_fp(tp1)}</code>\n"
-        f"⏳ Holding {TP3_PCT*100:.0f}% ke TP3 @ <code>{_fp(tp3)}</code>  "
+        f"⏳ Holding {TP3_CLOSE_PCT*100:.0f}% ke TP3 @ <code>{_fp(tp3)}</code>  "
             f"<i>({_pct_price(entry, tp3)})</i>{cascade_note}\n\n"
         f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
     )

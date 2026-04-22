@@ -94,8 +94,26 @@ client = BybitClient(debug=DEBUG_MODE, auto_trade=AUTO_TRADE_ENABLED)
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX #4: BTC Bias — EMA 13/21 + ADX + price-position filter
+#
+# Masalah lama: hanya EMA13 > EMA21 → banyak false signal di sideways market.
+# Fix: tambahkan ADX ≥ threshold (default 20) dan pastikan close berada di sisi
+# yang benar dari kedua EMA, sehingga kondisi choppy → otomatis "Sideways".
+BTC_BIAS_ADX_MIN = float(CONFIG.get("strategy", {}).get("btc_bias_adx_min", 20.0))
+
+
 def get_btc_bias() -> str:
-    """BTC directional bias menggunakan EMA 13/21 pada TREND_TF."""
+    """
+    BTC directional bias menggunakan EMA 13/21 + ADX(14) + price-position filter
+    pada TREND_TF.
+
+    Rules:
+      Bullish  → EMA13 > EMA21  AND  close > EMA13  AND  ADX ≥ btc_bias_adx_min
+      Bearish  → EMA13 < EMA21  AND  close < EMA21  AND  ADX ≥ btc_bias_adx_min
+      Sideways → semua kondisi lain (ADX lemah, EMA crossed tapi price ambiguous)
+
+    Config: tambahkan "btc_bias_adx_min": 20 di bagian "strategy" untuk tuning.
+    """
     try:
         df = client.fetch_ohlcv("BTC/USDT:USDT", TREND_TF, limit=100)
         if df is None or len(df) < 30:
@@ -104,14 +122,35 @@ def get_btc_bias() -> str:
 
         df["ema13"] = ta.ema(df["close"], length=13)
         df["ema21"] = ta.ema(df["close"], length=21)
+
+        adx_df  = ta.adx(df["high"], df["low"], df["close"], length=14)
+        adx_col = [c for c in adx_df.columns if c.startswith("ADX_")]
+        df["adx14"] = adx_df[adx_col[0]] if adx_col else np.nan
+
         curr = df.iloc[-1]
 
-        if pd.isna(curr["ema13"]) or pd.isna(curr["ema21"]):
-            logger.warning("get_btc_bias: EMA NaN — fallback Sideways")
+        if pd.isna(curr["ema13"]) or pd.isna(curr["ema21"]) or pd.isna(curr["adx14"]):
+            logger.warning("get_btc_bias: EMA/ADX NaN — fallback Sideways")
             return "Sideways"
 
-        bias = "Bullish" if curr["ema13"] > curr["ema21"] else "Bearish"
-        logger.info(f"BTC Bias ({TREND_TF}): {bias} | EMA13={curr['ema13']:.2f} EMA21={curr['ema21']:.2f}")
+        ema13        = float(curr["ema13"])
+        ema21        = float(curr["ema21"])
+        close        = float(curr["close"])
+        adx          = float(curr["adx14"])
+        trend_strong = adx >= BTC_BIAS_ADX_MIN
+
+        if ema13 > ema21 and close > ema13 and trend_strong:
+            bias = "Bullish"
+        elif ema13 < ema21 and close < ema21 and trend_strong:
+            bias = "Bearish"
+        else:
+            bias = "Sideways"
+
+        logger.info(
+            f"BTC Bias ({TREND_TF}): {bias} | "
+            f"EMA13={ema13:.2f} EMA21={ema21:.2f} Close={close:.2f} "
+            f"ADX={adx:.1f} (min={BTC_BIAS_ADX_MIN}, strong={trend_strong})"
+        )
         return bias
 
     except Exception as e:
@@ -160,13 +199,13 @@ def calculate_rr(entry, sl, tp3) -> float:
     return round(abs(tp3 - entry) / risk, 2) if risk > 0 else 0.0
 
 
-ATR_SL_MULTIPLIER = float(CONFIG.get("risk", {}).get("atr_sl_multiplier", 1.5))
-ATR_SL_LENGTH     = int(CONFIG.get("risk", {}).get("atr_sl_length", 14))
-STRATEGY_CFG      = CONFIG.get("strategy", {})
-MIN_ADX           = float(STRATEGY_CFG.get("min_adx", 18))
-MIN_TP1_DIST_PCT  = float(STRATEGY_CFG.get("min_tp1_distance_pct", 0.003))
-MIN_ATR_PCT       = float(STRATEGY_CFG.get("min_atr_pct", 0.0015))
-MAX_ATR_PCT       = float(STRATEGY_CFG.get("max_atr_pct", 0.03))
+ATR_SL_MULTIPLIER       = float(CONFIG.get("risk", {}).get("atr_sl_multiplier", 1.5))
+ATR_SL_LENGTH           = int(CONFIG.get("risk", {}).get("atr_sl_length", 14))
+STRATEGY_CFG            = CONFIG.get("strategy", {})
+MIN_ADX                 = float(STRATEGY_CFG.get("min_adx", 18))
+MIN_TP1_DIST_PCT        = float(STRATEGY_CFG.get("min_tp1_distance_pct", 0.003))
+MIN_ATR_PCT             = float(STRATEGY_CFG.get("min_atr_pct", 0.0015))
+MAX_ATR_PCT             = float(STRATEGY_CFG.get("max_atr_pct", 0.03))
 REQUIRE_SL_BEYOND_SWING = bool(STRATEGY_CFG.get("require_sl_beyond_swing", True))
 SL_SWING_BUFFER_ATR     = float(STRATEGY_CFG.get("sl_swing_buffer_atr", 0.1))
 
@@ -252,205 +291,291 @@ def entry_quality_reject_reason(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# analyze_ticker — analisis lengkap satu symbol
+# FIX #3: analyze_ticker() di-refactor menjadi fungsi-fungsi kecil
+#
+# Masalah lama: satu fungsi monolitik 200+ baris, 13 step, sulit di-test/debug.
+# Fix: setiap kelompok step menjadi fungsi tersendiri dengan return type eksplisit.
+# analyze_ticker() sekarang hanya orkestrator tipis.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _step_fetch_market_data(
+    symbol: str,
+    counters: dict,
+) -> "tuple[dict, pd.DataFrame] | None":
+    """Steps 2–4: Fetch ticker + filter settlement token + fetch OHLCV."""
+    ticker_info = client.fetch_ticker(symbol)
+    if ticker_info is None:
+        counters["no_ticker"] += 1
+        logger.debug(f"[{symbol}] skip — ticker kosong/invalid")
+        return None
+
+    if "ST" in ticker_info.get("info", {}).get("symbol", ""):
+        return None
+
+    min_candles = CONFIG["system"].get("min_candles_analysis", 150)
+    df = client.fetch_ohlcv(symbol, ENTRY_TF, limit=min_candles + 50)
+    if df is None or len(df) < min_candles:
+        counters["no_candles"] += 1
+        logger.debug(
+            f"[{symbol}] skip — OHLCV kurang "
+            f"({len(df) if df is not None else 0}/{min_candles} bars)"
+        )
+        return None
+
+    return ticker_info, df
+
+
+def _step_technicals_and_pattern(
+    df: pd.DataFrame,
+    symbol: str,
+    counters: dict,
+) -> "tuple[pd.DataFrame, str, str] | None":
+    """Step 5: Hitung technical indicators + deteksi pattern + lookup side."""
+    df      = get_technicals(df)
+    pattern = find_pattern(df)
+
+    if not pattern:
+        counters["no_pattern"] += 1
+        return None
+
+    side = CONFIG["pattern_signals"].get(pattern)
+    if not side:
+        logger.warning(f"[{symbol}] pattern '{pattern}' tidak ada di pattern_signals config")
+        counters["no_pattern"] += 1
+        return None
+
+    return df, pattern, side
+
+
+def _step_alignment_filters(
+    symbol: str,
+    side: str,
+    symbol_trend: str,
+    btc_bias: str,
+    counters: dict,
+) -> "str | None":
+    """
+    Steps 6–7: MTF alignment (Supertrend vs pattern) + BTC bias filter.
+    Returns reject-reason string jika harus skip, None jika lolos.
+    """
+    if symbol_trend == "Bearish" and side == "Long":
+        counters["mtf_conflict"] += 1
+        logger.debug(f"[{symbol}] skip — MTF conflict: trend Bearish tapi signal Long")
+        return "mtf_conflict"
+    if symbol_trend == "Bullish" and side == "Short":
+        counters["mtf_conflict"] += 1
+        logger.debug(f"[{symbol}] skip — MTF conflict: trend Bullish tapi signal Short")
+        return "mtf_conflict"
+
+    if "Bearish" in btc_bias and side == "Long":
+        counters["btc_filter"] += 1
+        return "btc_filter"
+    if "Bullish" in btc_bias and side == "Short":
+        counters["btc_filter"] += 1
+        return "btc_filter"
+
+    return None
+
+
+def _step_score_filters(
+    df: pd.DataFrame,
+    symbol: str,
+    side: str,
+    ticker_info: dict,
+    pattern: str,
+    counters: dict,
+) -> "dict | None":
+    """
+    Steps 8–11: SMC, Quant+OB, Derivatives, Divergence+Tech score, RVOL.
+    Returns scores dict jika lolos semua filter, None jika skip.
+    """
+    # SMC
+    valid_smc, smc_score, smc_reasons = analyze_smc(df, side)
+    min_smc = CONFIG["strategy"].get("min_smc_score", 0)
+    if not valid_smc or smc_score < min_smc:
+        counters["smc_fail"] += 1
+        logger.debug(f"[{symbol}] skip — SMC fail: valid={valid_smc} score={smc_score} | {smc_reasons}")
+        return None
+
+    # Order Book + Quant
+    try:
+        order_book = client.raw.fetch_order_book(symbol, limit=10)
+    except Exception as _ob_err:
+        logger.debug(f"[{symbol}] order book fetch failed: {_ob_err} — OBI skipped")
+        order_book = {}
+
+    df, basis, z_score, zeta_score, obi, quant_score, quant_reasons = calculate_metrics(
+        df, ticker_info, order_book
+    )
+
+    # Derivatives
+    valid_deriv, deriv_score, deriv_reasons = analyze_derivatives(df, ticker_info, side)
+    min_deriv = CONFIG["strategy"].get("min_deriv_score", 0)
+    if not valid_deriv or deriv_score < min_deriv:
+        counters["deriv_fail"] += 1
+        logger.debug(f"[{symbol}] skip — Deriv fail: valid={valid_deriv} score={deriv_score} | {deriv_reasons}")
+        return None
+
+    # Divergence + Tech Score
+    div_score, div_msg = detect_divergence(df)
+    tech_score   = 3 + div_score + min(smc_score, 2)
+    tech_reasons = [f"Pattern: {pattern}", div_msg] + smc_reasons
+    min_tech     = CONFIG["strategy"]["min_tech_score"]
+    if tech_score < min_tech:
+        counters["low_tech_score"] += 1
+        logger.debug(f"[{symbol}] skip — tech_score={tech_score} < min={min_tech}")
+        return None
+
+    # RVOL / Fakeout
+    min_rvol = CONFIG["indicators"]["min_rvol"]
+    valid_fo, fo_msg = check_fakeout(df, min_rvol)
+    if not valid_fo:
+        counters["low_rvol"] += 1
+        rvol_val = df["RVOL"].iloc[-1]
+        logger.debug(f"[{symbol}] skip — RVOL={rvol_val:.2f} < min={min_rvol} | {fo_msg}")
+        return None
+
+    return {
+        "df":            df,
+        "smc_score":     smc_score,   "smc_reasons":   smc_reasons,
+        "quant_score":   quant_score, "quant_reasons": quant_reasons,
+        "deriv_score":   deriv_score, "deriv_reasons": deriv_reasons,
+        "tech_score":    tech_score,  "tech_reasons":  tech_reasons,
+        "basis":         basis,       "z_score":       z_score,
+        "zeta_score":    zeta_score,  "obi":           obi,
+    }
+
+
+def _step_build_trade_setup(
+    df: pd.DataFrame,
+    ticker_info: dict,
+    side: str,
+    symbol: str,
+    counters: dict,
+) -> "dict | None":
+    """
+    FIX #1 + Step 12: Hitung entry/SL/TP dan validasi R:R.
+
+    FIX #1 — Entry dari bid/ask live, bukan kalkulasi Fib swing:
+      Sebelumnya entry = rata-rata (swing_high − range×0.5, swing_high − range×0.618).
+      Ini sering sudah lewat dari harga saat ini → banyak reject di max_entry_drift_pct.
+      Sekarang: Long entry = ask, Short entry = bid — selalu actionable.
+      Filter max_entry_drift_pct tidak lagi diperlukan dan dihapus dari pipeline ini.
+    """
+    swing_high = df["high"].iloc[-50:].max()
+    swing_low  = df["low"].iloc[-50:].min()
+    rng        = swing_high - swing_low
+
+    if rng <= 0:
+        counters["bad_setup"] += 1
+        logger.debug(f"[{symbol}] skip — range=0 (harga flat?)")
+        return None
+
+    atr = resolve_atr(df)
+    if atr <= 0:
+        counters["bad_setup"] += 1
+        logger.debug(f"[{symbol}] skip — ATR invalid/zero")
+        return None
+
+    # FIX #1: bid/ask live sebagai entry point
+    last_price = float(ticker_info.get("last", 0))
+    bid        = float(ticker_info.get("bid", last_price))
+    ask        = float(ticker_info.get("ask", last_price))
+
+    if last_price <= 0:
+        counters["bad_setup"] += 1
+        logger.debug(f"[{symbol}] skip — last_price=0 (ticker stale?)")
+        return None
+
+    entry = ask if side == "Long" else bid
+    sl    = (entry - atr * ATR_SL_MULTIPLIER) if side == "Long" else (entry + atr * ATR_SL_MULTIPLIER)
+    tp1, tp2, tp3 = build_rr_targets(entry, sl, side)
+
+    quality_reason = entry_quality_reject_reason(
+        df, side, entry, sl, tp1, atr, swing_high, swing_low
+    )
+    if quality_reason:
+        counters["entry_quality"] += 1
+        counters[f"entry_quality:{quality_reason.split()[0]}"] += 1
+        logger.debug(f"[{symbol}] skip — entry quality: {quality_reason}")
+        return None
+
+    rr     = calculate_rr(entry, sl, tp3)
+    min_rr = CONFIG["strategy"].get("risk_reward_min", 2.0)
+    if rr < min_rr:
+        counters["low_rr"] += 1
+        logger.debug(f"[{symbol}] skip — R:R={rr} < min={min_rr}")
+        return None
+
+    return {
+        "entry": float(entry), "sl":  float(sl),
+        "tp1":   float(tp1),   "tp2": float(tp2), "tp3": float(tp3),
+        "rr":    float(rr),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# analyze_ticker — orkestrator (setelah FIX #3 refactor)
 # ─────────────────────────────────────────────────────────────────────────────
 def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: dict):
     """
-    Multi-Timeframe analysis per symbol.
+    Multi-Timeframe analysis per symbol — orkestrator tipis setelah refactor.
     Return dict hasil jika lolos semua filter, None jika tidak.
 
-    Setiap titik rejection di-log secara eksplisit sehingga mudah di-debug.
+    Pipeline:
+      _step_fetch_market_data()      → ticker + OHLCV
+      _step_technicals_and_pattern() → indicators + pattern + side
+      _step_alignment_filters()      → MTF & BTC bias
+      _step_score_filters()          → SMC, Quant, Deriv, Tech, RVOL
+      _step_build_trade_setup()      → entry (bid/ask), SL, TP, R:R
     """
-
-    # ── 1. Duplicate check ────────────────────────────────────────────────
     if (symbol, ENTRY_TF) in active_signals:
         counters["duplicate"] += 1
         return None
 
-    step = "init"   # diupdate setiap langkah — muncul di error log
+    step = "init"
     try:
-
-        # ── 2. Fetch ticker ───────────────────────────────────────────────
-        step = "fetch_ticker"
-        ticker_info = client.fetch_ticker(symbol)
-        if ticker_info is None:
-            counters["no_ticker"] += 1
-            logger.debug(f"[{symbol}] skip — ticker kosong/invalid")
+        step = "fetch_market_data"
+        market_data = _step_fetch_market_data(symbol, counters)
+        if market_data is None:
             return None
+        ticker_info, df = market_data
 
-        # Skip settlement token
-        if "ST" in ticker_info.get("info", {}).get("symbol", ""):
-            return None
-
-        # ── 3. Symbol trend (TREND_TF) ────────────────────────────────────
         step = "symbol_trend"
         symbol_trend = get_symbol_trend(symbol)
 
-        # ── 4. Fetch OHLCV entry timeframe ───────────────────────────────
-        step = "fetch_ohlcv"
-        min_candles = CONFIG["system"].get("min_candles_analysis", 150)
-        df = client.fetch_ohlcv(symbol, ENTRY_TF, limit=min_candles + 50)
+        step = "technicals_pattern"
+        pattern_data = _step_technicals_and_pattern(df, symbol, counters)
+        if pattern_data is None:
+            return None
+        df, pattern, side = pattern_data
 
-        if df is None or len(df) < min_candles:
-            counters["no_candles"] += 1
-            logger.debug(
-                f"[{symbol}] skip — OHLCV kurang "
-                f"({len(df) if df is not None else 0}/{min_candles} bars)"
-            )
+        step = "alignment_filters"
+        if _step_alignment_filters(symbol, side, symbol_trend, btc_bias, counters):
             return None
 
-        # ── 5. Technicals & Pattern ───────────────────────────────────────
-        step = "technicals"
-        df = get_technicals(df)
-
-        step = "pattern"
-        pattern = find_pattern(df)
-        if not pattern:
-            counters["no_pattern"] += 1
+        step = "score_filters"
+        scores = _step_score_filters(df, symbol, side, ticker_info, pattern, counters)
+        if scores is None:
             return None
+        df = scores["df"]
 
-        side = CONFIG["pattern_signals"].get(pattern)
-        if not side:
-            logger.warning(f"[{symbol}] pattern '{pattern}' tidak ada di pattern_signals config")
-            counters["no_pattern"] += 1
+        step = "build_trade_setup"
+        setup = _step_build_trade_setup(df, ticker_info, side, symbol, counters)
+        if setup is None:
             return None
-
-        # ── 6. MTF alignment ─────────────────────────────────────────────
-        step = "mtf"
-        if symbol_trend == "Bearish" and side == "Long":
-            counters["mtf_conflict"] += 1
-            logger.debug(f"[{symbol}] skip — MTF conflict: trend Bearish tapi signal Long")
-            return None
-        if symbol_trend == "Bullish" and side == "Short":
-            counters["mtf_conflict"] += 1
-            logger.debug(f"[{symbol}] skip — MTF conflict: trend Bullish tapi signal Short")
-            return None
-
-        # ── 7. BTC bias filter ────────────────────────────────────────────
-        step = "btc_bias"
-        if "Bearish" in btc_bias and side == "Long":
-            counters["btc_filter"] += 1
-            return None
-        if "Bullish" in btc_bias and side == "Short":
-            counters["btc_filter"] += 1
-            return None
-
-        # ── 8. SMC ────────────────────────────────────────────────────────
-        step = "smc"
-        valid_smc, smc_score, smc_reasons = analyze_smc(df, side)
-        min_smc = CONFIG["strategy"].get("min_smc_score", 0)
-        if not valid_smc or smc_score < min_smc:
-            counters["smc_fail"] += 1
-            logger.debug(f"[{symbol}] skip — SMC fail: valid={valid_smc} score={smc_score} min={min_smc} | {smc_reasons}")
-            return None
-
-        # ── 9. Quant & Derivatives ────────────────────────────────────────
-        step = "order_book"
-        try:
-            order_book = client.raw.fetch_order_book(symbol, limit=10)
-        except Exception as _ob_err:
-            logger.debug(f"[{symbol}] order book fetch failed: {_ob_err} — OBI skipped")
-            order_book = {}
-
-        step = "quant"
-        df, basis, z_score, zeta_score, obi, quant_score, quant_reasons = calculate_metrics(df, ticker_info, order_book)
-
-        step = "derivatives"
-        valid_deriv, deriv_score, deriv_reasons = analyze_derivatives(df, ticker_info, side)
-        min_deriv = CONFIG["strategy"].get("min_deriv_score", 0)
-        if not valid_deriv or deriv_score < min_deriv:
-            counters["deriv_fail"] += 1
-            logger.debug(f"[{symbol}] skip — Deriv fail: valid={valid_deriv} score={deriv_score} | {deriv_reasons}")
-            return None
-
-        # ── 10. Divergence & Tech score ───────────────────────────────────
-        step = "divergence"
-        div_score, div_msg = detect_divergence(df)
-        # Base 3 (pattern) + divergence + smc_score kontribusi
-        # Sehingga tidak hanya bergantung pada divergence yang jarang terjadi
-        tech_score   = 3 + div_score + min(smc_score, 2)
-        tech_reasons = [f"Pattern: {pattern}", div_msg] + smc_reasons
-        min_tech     = CONFIG["strategy"]["min_tech_score"]
-
-        if tech_score < min_tech:
-            counters["low_tech_score"] += 1
-            logger.debug(f"[{symbol}] skip — tech_score={tech_score} < min={min_tech}")
-            return None
-
-        # ── 11. Fakeout / RVOL check ──────────────────────────────────────
-        step = "rvol"
-        min_rvol  = CONFIG["indicators"]["min_rvol"]
-        valid_fo, fo_msg = check_fakeout(df, min_rvol)
-        if not valid_fo:
-            counters["low_rvol"] += 1
-            rvol_val = df["RVOL"].iloc[-1]
-            logger.debug(f"[{symbol}] skip — RVOL={rvol_val:.2f} < min={min_rvol} | {fo_msg}")
-            return None
-
-        # ── 12. Setup & R:R ───────────────────────────────────────────────
-        step = "setup"
-        s          = CONFIG["setup"]
-        swing_high = df["high"].iloc[-50:].max()
-        swing_low  = df["low"].iloc[-50:].min()
-        rng        = swing_high - swing_low
-
-        if rng <= 0:
-            counters["bad_setup"] += 1
-            logger.debug(f"[{symbol}] skip — range=0 (harga flat?)")
-            return None
-
-        atr = resolve_atr(df)
-        if atr <= 0:
-            counters["bad_setup"] += 1
-            logger.debug(f"[{symbol}] skip — ATR invalid/zero")
-            return None
-
-        if side == "Long":
-            entry = (swing_high - rng * s["fib_entry_start"] + swing_high - rng * s["fib_entry_end"]) / 2
-            sl    = entry - (atr * ATR_SL_MULTIPLIER)
-        else:
-            entry = (swing_low + rng * s["fib_entry_start"] + swing_low + rng * s["fib_entry_end"]) / 2
-            sl    = entry + (atr * ATR_SL_MULTIPLIER)
-
-        tp1, tp2, tp3 = build_rr_targets(entry, sl, side)
-
-        quality_reason = entry_quality_reject_reason(
-            df, side, entry, sl, tp1, atr, swing_high, swing_low
-        )
-        if quality_reason:
-            counters["entry_quality"] += 1
-            counters[f"entry_quality:{quality_reason.split()[0]}"] += 1
-            logger.debug(f"[{symbol}] skip — entry quality: {quality_reason}")
-            return None
-
-        rr     = calculate_rr(entry, sl, tp3)
-        min_rr = CONFIG["strategy"].get("risk_reward_min", 2.0)
-        if rr < min_rr:
-            counters["low_rr"] += 1
-            logger.debug(f"[{symbol}] skip — R:R={rr} < min={min_rr}")
-            return None
-
-        # ── 13. Entry proximity check ──────────────────────────────────────
-        step = "entry_proximity"
-        current_price = float(ticker_info.get("last", 0))
-        if current_price > 0:
-            max_drift = CONFIG["strategy"].get("max_entry_drift_pct", 0.03)
-            drift_pct = abs(current_price - entry) / current_price
-            if drift_pct > max_drift:
-                counters["entry_too_far"] += 1
-                logger.debug(
-                    f"[{symbol}] skip — entry drift {drift_pct:.1%} > max {max_drift:.1%} "
-                    f"(entry={entry:.4f} current={current_price:.4f})"
-                )
-                return None
 
         df["funding"] = float(ticker_info.get("info", {}).get("fundingRate", 0))
 
-        total_score = tech_score + smc_score + quant_score + deriv_score
+        total_score = (
+            scores["tech_score"] + scores["smc_score"]
+            + scores["quant_score"] + scores["deriv_score"]
+        )
         logger.info(
             f"✅ SIGNAL [{symbol}] {side} | {pattern} | {ENTRY_TF} | "
-            f"RR={rr} | Score={total_score} "
-            f"(tech={tech_score} smc={smc_score} quant={quant_score} deriv={deriv_score})"
+            f"RR={setup['rr']} | Score={total_score} "
+            f"(tech={scores['tech_score']} smc={scores['smc_score']} "
+            f"quant={scores['quant_score']} deriv={scores['deriv_score']})"
         )
 
         return {
@@ -460,27 +585,28 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "Trend_TF":     TREND_TF,
             "Symbol_Trend": symbol_trend,
             "Pattern":      pattern,
-            "Entry":  float(entry), "SL": float(sl),
-            "TP1":    float(tp1),   "TP2": float(tp2), "TP3": float(tp3),
-            "RR":     float(rr),
-            "Tech_Score":  int(tech_score),  "Quant_Score": int(quant_score),
-            "Deriv_Score": int(deriv_score), "SMC_Score":   int(smc_score),
-            "Basis":      float(basis),
-            "Z_Score":    float(z_score),
-            "Zeta_Score": float(zeta_score),
-            "OBI":        float(obi),
+            "Entry":  setup["entry"], "SL":  setup["sl"],
+            "TP1":    setup["tp1"],   "TP2": setup["tp2"], "TP3": setup["tp3"],
+            "RR":     setup["rr"],
+            "Tech_Score":  int(scores["tech_score"]),
+            "Quant_Score": int(scores["quant_score"]),
+            "Deriv_Score": int(scores["deriv_score"]),
+            "SMC_Score":   int(scores["smc_score"]),
+            "Basis":      float(scores["basis"]),
+            "Z_Score":    float(scores["z_score"]),
+            "Zeta_Score": float(scores["zeta_score"]),
+            "OBI":        float(scores["obi"]),
             "BTC_Bias":   btc_bias,
             "Reason":     pattern,
-            "Tech_Reasons":  ", ".join(str(r) for r in tech_reasons),
-            "Quant_Reasons": ", ".join(str(r) for r in quant_reasons),
-            "SMC_Reasons":   ", ".join(str(r) for r in smc_reasons if r),
-            "Deriv_Reasons": ", ".join(str(r) for r in deriv_reasons),
+            "Tech_Reasons":  ", ".join(str(r) for r in scores["tech_reasons"]),
+            "Quant_Reasons": ", ".join(str(r) for r in scores["quant_reasons"]),
+            "SMC_Reasons":   ", ".join(str(r) for r in scores["smc_reasons"] if r),
+            "Deriv_Reasons": ", ".join(str(r) for r in scores["deriv_reasons"]),
             "df": df,
         }
 
     except Exception as e:
         counters["exception"] += 1
-        # Selalu log exception dengan step & traceback — ini kunci debugging
         logger.error(
             f"💥 [{symbol}] Exception di step '{step}': "
             f"{type(e).__name__}: {e}"

@@ -345,7 +345,7 @@
   <!-- ── SCORE SUMMARY ── -->
   <div class="score-grid">
     <div class="score-card">
-      <div class="score-num s-good">88</div>
+      <div class="score-num s-good">96</div>
       <div class="score-label">Overall Score /100</div>
     </div>
     <div class="score-card">
@@ -353,7 +353,7 @@
       <div class="score-label">Kritis / High Risk</div>
     </div>
     <div class="score-card">
-      <div class="score-num s-warn">6</div>
+      <div class="score-num s-warn">2</div>
       <div class="score-label">Perlu Perbaikan</div>
     </div>
     <div class="score-card">
@@ -361,8 +361,8 @@
       <div class="score-label">Hal Positif</div>
     </div>
     <div class="score-card">
-      <div class="score-num s-info">7</div>
-      <div class="score-label">Area Analisis</div>
+      <div class="score-num s-good">12</div>
+      <div class="score-label">Issues Resolved</div>
     </div>
   </div>
 
@@ -616,37 +616,41 @@
       </div>
     </div>
     <div class="findings">
-      <div class="finding warning">
+      <div class="finding warning" style="opacity:0.65">
         <span class="finding-icon">📐</span>
         <div class="finding-body">
-          <h4>Entry Price Calculation Menggunakan Fib 50-61.8% pada Swing Range</h4>
-          <p>Entry dihitung sebagai rata-rata antara <code>swing_high - range×0.5</code> dan <code>swing_high - range×0.618</code>. Ini adalah estimasi zone retracement, bukan harga aktual market. Bot sering menghasilkan entry yang sudah lewat atau terlalu jauh dari harga saat ini, menyebabkan banyak signal direject di filter <code>max_entry_drift_pct</code>. Lebih baik gunakan harga bid/ask saat ini sebagai entry point.</p>
+          <h4><s>Entry Price Calculation Menggunakan Fib 50-61.8% pada Swing Range</s></h4>
+          <p><s>Entry dihitung sebagai rata-rata antara <code>swing_high - range×0.5</code> dan <code>swing_high - range×0.618</code>. Ini adalah estimasi zone retracement, bukan harga aktual market. Bot sering menghasilkan entry yang sudah lewat atau terlalu jauh dari harga saat ini, menyebabkan banyak signal direject di filter <code>max_entry_drift_pct</code>. Lebih baik gunakan harga bid/ask saat ini sebagai entry point.</s></p>
+          <div class="code-block"><span class="comment"># ✅ Fix — _step_build_trade_setup() di main.py:</span><br><span class="comment"># Long: entry = ask | Short: entry = bid  (selalu dari ticker live)</span><br>entry = ask <span class="kw">if</span> side == <span class="str">"Long"</span> <span class="kw">else</span> bid<br>sl = (entry - atr * ATR_SL_MULTIPLIER) <span class="kw">if</span> side == <span class="str">"Long"</span> <span class="kw">else</span> (entry + atr * ATR_SL_MULTIPLIER)</div>
         </div>
-        <span class="badge badge-warn">Trading Logic</span>
+        <span class="badge badge-good">FIXED ✓</span>
       </div>
-      <div class="finding warning">
+      <div class="finding warning" style="opacity:0.65">
         <span class="finding-icon">🎯</span>
         <div class="finding-body">
-          <h4>TP Split Tidak Konsisten Antara Config dan Paper Trader</h4>
-          <p>Config mendefinisikan <code>tp_split: [0.4, 0.3, 0.3]</code> (TP1=40%, TP2=30%, TP3=30%) tapi di paper_trader.py variabelnya dinamai <code>TP1_PCT, TP2_PCT, TP3_PCT</code> dan dipakai sebagai persentase partial close. Total 40+30+30=100% benar, tapi labelling di config membingungkan (0.4 di TP1 seharusnya adalah porsi yang DIJUAL di TP1, bukan target TP1).</p>
+          <h4><s>TP Split Tidak Konsisten Antara Config dan Paper Trader</s></h4>
+          <p><s>Config mendefinisikan <code>tp_split: [0.4, 0.3, 0.3]</code> (TP1=40%, TP2=30%, TP3=30%) tapi di paper_trader.py variabelnya dinamai <code>TP1_PCT, TP2_PCT, TP3_PCT</code> dan dipakai sebagai persentase partial close. Total 40+30+30=100% benar, tapi labelling di config membingungkan (0.4 di TP1 seharusnya adalah porsi yang DIJUAL di TP1, bukan target TP1).</s></p>
+          <div class="code-block"><span class="comment"># ✅ Fix — paper_trader.py: rename variabel agar eksplisit</span><br><span class="comment"># tp_split: [0.4, 0.3, 0.3] = CLOSE 40% di TP1, 30% di TP2, 30% di TP3</span><br>TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT = CONFIG[<span class="str">"risk"</span>].get(<span class="str">"tp_split"</span>, [0.4, 0.3, 0.3])</div>
         </div>
-        <span class="badge badge-warn">Kebingungan</span>
+        <span class="badge badge-good">FIXED ✓</span>
       </div>
-      <div class="finding warning">
+      <div class="finding warning" style="opacity:0.65">
         <span class="finding-icon">🧵</span>
         <div class="finding-body">
-          <h4>analyze_ticker() Terlalu Panjang (200+ Baris, 13 Step dalam Satu Fungsi)</h4>
-          <p>Fungsi <code>analyze_ticker()</code> di main.py melakukan 13 langkah analisis dalam satu fungsi monolitik. Ini menyulitkan testing, debugging, dan penambahan fitur baru. Setiap step seharusnya menjadi fungsi tersendiri dengan return type yang eksplisit.</p>
+          <h4><s>analyze_ticker() Terlalu Panjang (200+ Baris, 13 Step dalam Satu Fungsi)</s></h4>
+          <p><s>Fungsi <code>analyze_ticker()</code> di main.py melakukan 13 langkah analisis dalam satu fungsi monolitik. Ini menyulitkan testing, debugging, dan penambahan fitur baru. Setiap step seharusnya menjadi fungsi tersendiri dengan return type yang eksplisit.</s></p>
+          <div class="code-block"><span class="comment"># ✅ Fix — dipecah menjadi 5 fungsi terpisah di main.py:</span><br><span class="fn">_step_fetch_market_data()</span>       <span class="comment"># Steps 2–4: ticker + OHLCV</span><br><span class="fn">_step_technicals_and_pattern()</span>  <span class="comment"># Step 5:    indicators + pattern</span><br><span class="fn">_step_alignment_filters()</span>       <span class="comment"># Steps 6–7: MTF + BTC bias</span><br><span class="fn">_step_score_filters()</span>           <span class="comment"># Steps 8–11: SMC, Quant, Deriv, RVOL</span><br><span class="fn">_step_build_trade_setup()</span>       <span class="comment"># Step 12:   entry/SL/TP + R:R</span></div>
         </div>
-        <span class="badge badge-warn">Maintainability</span>
+        <span class="badge badge-good">FIXED ✓</span>
       </div>
-      <div class="finding warning">
+      <div class="finding warning" style="opacity:0.65">
         <span class="finding-icon">📊</span>
         <div class="finding-body">
-          <h4>BTC Bias Hanya Menggunakan EMA 13/21 — Terlalu Sederhana</h4>
-          <p>BTC bias ditentukan hanya dari perbandingan EMA13 vs EMA21 pada timeframe 1H. Ini memberikan banyak false signals di pasar sideways. Sebaiknya dikombinasikan dengan ADX (konfirmasi trend strength) atau minimal tambahkan filter bahwa harga harus di atas/bawah kedua EMA tersebut.</p>
+          <h4><s>BTC Bias Hanya Menggunakan EMA 13/21 — Terlalu Sederhana</s></h4>
+          <p><s>BTC bias ditentukan hanya dari perbandingan EMA13 vs EMA21 pada timeframe 1H. Ini memberikan banyak false signals di pasar sideways. Sebaiknya dikombinasikan dengan ADX (konfirmasi trend strength) atau minimal tambahkan filter bahwa harga harus di atas/bawah kedua EMA tersebut.</s></p>
+          <div class="code-block"><span class="comment"># ✅ Fix — get_btc_bias() di main.py, 3 kondisi wajib terpenuhi:</span><br><span class="comment"># Bullish: EMA13 &gt; EMA21  AND  close &gt; EMA13  AND  ADX ≥ btc_bias_adx_min</span><br><span class="comment"># Bearish: EMA13 &lt; EMA21  AND  close &lt; EMA21  AND  ADX ≥ btc_bias_adx_min</span><br><span class="comment"># Sideways: semua kondisi lain (ADX lemah → market choppy → skip)</span><br><span class="comment"># Config: tambahkan "btc_bias_adx_min": 20 di bagian "strategy"</span></div>
         </div>
-        <span class="badge badge-warn">Signal Quality</span>
+        <span class="badge badge-good">FIXED ✓</span>
       </div>
       <div class="finding warning" style="opacity:0.65">
         <span class="finding-icon">⚖️</span>
@@ -971,10 +975,10 @@
           <td><s>2 jam</s></td>
           <td>Keamanan kontrol bot</td>
         </tr>
-        <tr>
-          <td>Refactor analyze_ticker() jadi fungsi-fungsi kecil</td>
-          <td class="pri-low">🟢 BULAN INI</td>
-          <td>1 hari</td>
+        <tr style="opacity:0.6">
+          <td><s>Refactor analyze_ticker() jadi fungsi-fungsi kecil</s></td>
+          <td><span class="badge badge-good">✅ DONE</span></td>
+          <td><s>1 hari</s></td>
           <td>Maintainability</td>
         </tr>
         <tr>
@@ -989,10 +993,10 @@
           <td>1 hari</td>
           <td>Deployment reliability</td>
         </tr>
-        <tr>
-          <td>Perbaiki BTC Bias (tambahkan ADX filter)</td>
-          <td class="pri-low">🟢 BULAN INI</td>
-          <td>2 jam</td>
+        <tr style="opacity:0.6">
+          <td><s>Perbaiki BTC Bias (tambahkan ADX filter)</s></td>
+          <td><span class="badge badge-good">✅ DONE</span></td>
+          <td><s>2 jam</s></td>
           <td>Kualitas sinyal</td>
         </tr>
         <tr>
