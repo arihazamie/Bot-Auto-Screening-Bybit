@@ -26,6 +26,8 @@ from modules.database import (
     get_waiting_signals,
     mark_signal_ingested,
     get_closed_trades_last_24h,
+    get_closed_trades_today,
+    get_trades_today,
     get_paper_balance,
     save_daily_report,
 )
@@ -40,6 +42,10 @@ TARGET_LEV     = RISK['target_leverage']
 RISK_PERCENT   = RISK['risk_percent']
 MAX_POSITIONS  = RISK['max_positions']
 TP_SPLIT       = RISK['tp_split']
+USE_MAX_LEVERAGE = RISK.get('use_max_leverage', False)
+MAX_DAILY_LOSS = RISK.get('max_daily_loss_pct', 0.01)
+DAILY_TARGET   = RISK.get('daily_profit_target_pct', 0.015)
+MAX_DAILY_TRADES = RISK.get('max_daily_trades', 3)
 MODE           = "REAL" if AUTO_TRADE else "PAPER"
 
 # ─── Logging ───────────────────────────────────────────────
@@ -61,6 +67,34 @@ _ex      = client.raw   # raw ccxt untuk order/position ops
 # ══════════════════════════════════════════════════════════
 # REAL TRADE HELPERS
 # ══════════════════════════════════════════════════════════
+
+def build_rr_targets(entry: float, sl: float, side: str):
+    """Fallback TP generator: TP1=1R, TP2=2R, TP3=3R."""
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return 0.0, 0.0, 0.0
+    if side == "Long":
+        return entry + risk, entry + risk * 2.0, entry + risk * 3.0
+    return entry - risk, entry - risk * 2.0, entry - risk * 3.0
+
+
+def normalize_rr_targets(sig: dict):
+    """Prefer stored TP values, but rebuild them from SL when missing."""
+    entry = float(sig['entry_price'])
+    sl    = float(sig['sl_price'])
+    side  = sig['side']
+    tp1 = float(sig.get('tp1', 0) or 0)
+    tp2 = float(sig.get('tp2', 0) or 0)
+    tp3 = float(sig.get('tp3', 0) or 0)
+    if tp1 > 0 and tp2 > 0 and tp3 > 0:
+        return tp1, tp2, tp3
+    return build_rr_targets(entry, sl, side)
+
+
+def get_leverage_for(symbol: str) -> int:
+    if not USE_MAX_LEVERAGE:
+        return TARGET_LEV
+    return client.fetch_max_leverage(symbol, fallback=TARGET_LEV)
 
 def place_split_tps(symbol: str, side: str, total_qty: float, tp1, tp2, tp3) -> bool:
     """Place 3 limit TP orders on Bybit (real mode only)."""
@@ -168,11 +202,18 @@ def on_position_update(message):
 # SIGNAL INGESTION
 # ══════════════════════════════════════════════════════════
 
-def _daily_loss_limit_reached() -> bool:
-    """Return True jika total PnL hari ini melampaui batas rugi harian."""
-    max_loss_pct = RISK.get("max_daily_loss_pct", 0.10)
+def _daily_entry_limit_reached() -> bool:
+    """Return True jika target/loss/jumlah trade harian sudah membatasi entry baru."""
     try:
-        closed_today = get_closed_trades_last_24h()
+        trades_today = get_trades_today()
+        if MAX_DAILY_TRADES and len(trades_today) >= MAX_DAILY_TRADES:
+            logger.warning(
+                f"🛑 [{MODE}] Max daily trades tercapai — "
+                f"{len(trades_today)}/{MAX_DAILY_TRADES}. Posisi baru ditahan."
+            )
+            return True
+
+        closed_today = get_closed_trades_today()
         total_pnl = sum(float(t.get("pnl", 0)) for t in closed_today)
         balance = get_paper_balance() if not AUTO_TRADE else None
         if AUTO_TRADE:
@@ -181,15 +222,26 @@ def _daily_loss_limit_reached() -> bool:
                 balance = float(bal_info["total"]["USDT"])
             except Exception:
                 return False
-        if balance and balance > 0 and total_pnl < -(balance * max_loss_pct):
+        if not balance or balance <= 0:
+            return False
+
+        pnl_pct = total_pnl / balance
+        if DAILY_TARGET and pnl_pct >= DAILY_TARGET:
+            logger.warning(
+                f"✅ [{MODE}] Daily profit target tercapai — PnL: ${total_pnl:.2f} "
+                f"({pnl_pct:.1%}) >= {DAILY_TARGET:.1%}. Posisi baru ditahan."
+            )
+            return True
+
+        if MAX_DAILY_LOSS and pnl_pct <= -MAX_DAILY_LOSS:
             logger.warning(
                 f"🛑 [{MODE}] Daily loss limit tercapai — PnL: ${total_pnl:.2f} "
-                f"({total_pnl / balance:.1%}) melewati -{max_loss_pct:.0%}. "
+                f"({pnl_pct:.1%}) <= -{MAX_DAILY_LOSS:.1%}. "
                 f"Posisi baru ditahan sampai besok."
             )
             return True
     except Exception as e:
-        logger.debug(f"_daily_loss_limit_reached error: {e}")
+        logger.debug(f"_daily_entry_limit_reached error: {e}")
     return False
 
 
@@ -198,8 +250,8 @@ def ingest_signals():
     if count_open_active_trades() >= MAX_POSITIONS:
         return
 
-    # ✅ Circuit breaker: hentikan posisi baru jika daily loss limit tercapai
-    if _daily_loss_limit_reached():
+    # Circuit breaker: hentikan posisi baru jika target/loss/jumlah trade harian tercapai.
+    if _daily_entry_limit_reached():
         return
 
     try:
@@ -214,25 +266,21 @@ def ingest_signals():
         return
 
     open_count = count_open_active_trades()
+    daily_count = len(get_trades_today())
     for sig in get_waiting_signals():
         if open_count >= MAX_POSITIONS:
+            break
+        if MAX_DAILY_TRADES and daily_count >= MAX_DAILY_TRADES:
+            logger.info(f"🛑 [{MODE}] Sisa signal ditahan — max daily trades {daily_count}/{MAX_DAILY_TRADES}")
             break
 
         sym = sig['symbol']
         side = sig['side']
         entry = float(sig['entry_price'])
         sl = float(sig['sl_price'])
-        tp1, tp2, tp3 = float(sig['tp1']), float(sig['tp2']), float(sig['tp3'])
+        tp1, tp2, tp3 = normalize_rr_targets(sig)
 
-        # Determine leverage
-        final_lev = TARGET_LEV
-        if AUTO_TRADE:
-            try:
-                mkt = _ex.market(sym)
-                max_lev = float(mkt.get('limits', {}).get('leverage', {}).get('max', TARGET_LEV))
-                final_lev = min(TARGET_LEV, int(max_lev))
-            except Exception:
-                pass
+        final_lev = get_leverage_for(sym)
 
         position_value = equity * RISK_PERCENT * final_lev
         qty = position_value / entry
@@ -255,6 +303,7 @@ def ingest_signals():
         })
         mark_signal_ingested(sig['id'])
         open_count += 1
+        daily_count += 1
         logger.info(f"📥 Signal ingested: {sym} {side} | ${position_value:.2f} | {MODE}")
 
 

@@ -20,6 +20,12 @@ Partial TP Logic:
     TP2 hit → jual 30%, balance update realtime, SL → TP1 price
     TP3 hit → tutup sisa 40%, balance update, trade CLOSED
 
+TP generation:
+    Target TP diasumsikan sudah berbasis fixed R multiple dari SL:
+      TP1 = 1R, TP2 = 2R, TP3 = 3R
+    Jika payload lama tidak membawa level TP yang valid, helper fallback
+    akan menghitung ulang dari entry dan SL.
+
 Cascade TP (skip detection):
     Jika harga loncat langsung ke TP3 (skip TP1/TP2), proses TP1 & TP2 partial
     terlebih dahulu (dengan harga TP masing-masing), baru tutup di TP3.
@@ -27,6 +33,7 @@ Cascade TP (skip detection):
 
 import logging
 from datetime import datetime
+from modules.config_loader import CONFIG
 from modules.database import (
     get_paper_balance,
     update_paper_balance,
@@ -36,6 +43,7 @@ from modules.database import (
 from modules.notifier import send_reply
 
 logger = logging.getLogger("PaperTrader")
+TP1_PCT, TP2_PCT, TP3_PCT = CONFIG["risk"].get("tp_split", [0.4, 0.3, 0.3])
 
 # ─── UI Helpers ───────────────────────────────────────────────────────────────
 
@@ -84,6 +92,30 @@ def _side_label(side: str) -> str:
     return "🚀 LONG" if side == 'Long' else "🔻 SHORT"
 
 
+def _build_rr_targets(entry: float, sl: float, side: str):
+    """Fallback TP generator: TP1=1R, TP2=2R, TP3=3R."""
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return 0.0, 0.0, 0.0
+    if side == 'Long':
+        return entry + risk, entry + risk * 2.0, entry + risk * 3.0
+    return entry - risk, entry - risk * 2.0, entry - risk * 3.0
+
+
+def _normalize_rr_targets(trade: dict):
+    """Return TP levels, rebuilding them when payload is incomplete."""
+    entry = float(trade['entry_price'])
+    sl    = float(trade['sl_price'])
+    side  = trade['side']
+
+    tp1 = float(trade.get('tp1', 0) or 0)
+    tp2 = float(trade.get('tp2', 0) or 0)
+    tp3 = float(trade.get('tp3', 0) or 0)
+    if tp1 > 0 and tp2 > 0 and tp3 > 0:
+        return tp1, tp2, tp3
+    return _build_rr_targets(entry, sl, side)
+
+
 # ─── Core PnL Formula ─────────────────────────────────────────────────────────
 
 def _calc_pnl(side: str, entry: float, exit_price: float, qty: float) -> float:
@@ -106,14 +138,14 @@ def _calc_pnl(side: str, entry: float, exit_price: float, qty: float) -> float:
 def _remaining_qty(qty: float, tp1_logged: bool, tp2_logged: bool) -> float:
     """
     Sisa qty setelah partial TP:
-      TP1 hit → jual 30% → sisa 70%
-      TP2 hit → jual 30% lagi → sisa 40%
+      TP1 hit → jual sesuai risk.tp_split[0]
+      TP2 hit → jual sesuai risk.tp_split[1]
     """
     remaining = qty
     if tp1_logged:
-        remaining -= qty * 0.30
+        remaining -= qty * TP1_PCT
     if tp2_logged:
-        remaining -= qty * 0.30
+        remaining -= qty * TP2_PCT
     return round(remaining, 8)
 
 
@@ -125,10 +157,10 @@ def _effective_sl(trade: dict) -> float:
       - TP2 hit         → SL = TP1 price
     """
     if trade.get('_tp2_logged'):
-        return float(trade['tp1'])          # trail ke TP1
+        return float(trade.get('tp1', trade.get('entry_price', 0)))          # trail ke TP1
     if trade.get('is_sl_moved'):
-        return float(trade['entry_price'])  # breakeven
-    return float(trade['sl_price'])         # original
+        return float(trade.get('entry_price', 0))  # breakeven
+    return float(trade.get('sl_price', 0))         # original
 
 
 def _apply_partial_balance(pnl: float, label: str, symbol: str) -> float:
@@ -153,6 +185,7 @@ def paper_execute(trade: dict, current_price: float) -> bool:
     side  = trade['side']
     entry = float(trade['entry_price'])
     tg_id = trade.get('telegram_msg_id')
+    tp1, tp2, tp3 = _normalize_rr_targets(trade)
 
     filled = (side == 'Long'  and current_price <= entry) or \
              (side == 'Short' and current_price >= entry)
@@ -169,12 +202,12 @@ def paper_execute(trade: dict, current_price: float) -> bool:
     pos_val = current_price * qty
 
     sl_price_pct  = _pct_price(current_price, trade['sl_price'])
-    tp1_price_pct = _pct_price(current_price, trade['tp1'])
-    tp3_price_pct = _pct_price(current_price, trade['tp3'])
+    tp1_price_pct = _pct_price(current_price, tp1)
+    tp3_price_pct = _pct_price(current_price, tp3)
 
     sl_pnl  = _calc_pnl(side, current_price, float(trade['sl_price']), qty)
-    tp1_pnl = _calc_pnl(side, current_price, float(trade['tp1']),      qty)
-    tp3_pnl = _calc_pnl(side, current_price, float(trade['tp3']),      qty)
+    tp1_pnl = _calc_pnl(side, current_price, float(tp1), qty)
+    tp3_pnl = _calc_pnl(side, current_price, float(tp3), qty)
 
     sl_roi  = _roi_on_margin(sl_pnl,  margin)
     tp1_roi = _roi_on_margin(tp1_pnl, margin)
@@ -188,10 +221,10 @@ def paper_execute(trade: dict, current_price: float) -> bool:
         f"💰 Fill    <code>{_fp(current_price)}</code>\n\n"
         f"🛑 Stop    <code>{_fp(trade['sl_price'])}</code>  "
             f"<i>({sl_price_pct} · ROI {sl_roi})</i>\n"
-        f"🎯 TP1     <code>{_fp(trade['tp1'])}</code>  "
+        f"🎯 TP1     <code>{_fp(tp1)}</code>  "
             f"<i>({tp1_price_pct} · ROI {tp1_roi})</i>\n"
-        f"🎯 TP2     <code>{_fp(trade['tp2'])}</code>\n"
-        f"🎯 TP3     <code>{_fp(trade['tp3'])}</code>  "
+        f"🎯 TP2     <code>{_fp(tp2)}</code>\n"
+        f"🎯 TP3     <code>{_fp(tp3)}</code>  "
             f"<i>({tp3_price_pct} · ROI {tp3_roi})</i>\n\n"
         f"{SEP2}\n"
         f"💼 Margin  <code>${margin:.2f}</code>  ·  "
@@ -207,7 +240,7 @@ def paper_execute(trade: dict, current_price: float) -> bool:
 
 def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
     """
-    Partial close di TP1 (30% posisi).
+    Partial close di TP1 sesuai risk.tp_split[0].
     ✅ Update balance realtime
     ✅ Set SL ke Breakeven (entry)
     Returns partial PnL.
@@ -216,17 +249,15 @@ def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
     sym    = trade['symbol']
     side   = trade['side']
     entry  = float(trade['entry_price'])
-    tp1    = float(trade['tp1'])
-    tp2    = float(trade['tp2'])
-    tp3    = float(trade['tp3'])
+    tp1, tp2, tp3 = _normalize_rr_targets(trade)
     qty    = float(trade['quantity'])
     lev    = int(trade.get('leverage', 1))
     tg_id  = trade.get('telegram_msg_id')
 
-    partial_qty    = qty * 0.30
+    partial_qty    = qty * TP1_PCT
     partial_pnl    = _calc_pnl(side, entry, tp1, partial_qty)
     full_margin    = _calc_margin(entry, qty, lev)
-    partial_margin = full_margin * 0.30
+    partial_margin = full_margin * TP1_PCT
 
     # ✅ Balance update realtime
     new_balance = _apply_partial_balance(partial_pnl, "TP1", sym)
@@ -247,12 +278,12 @@ def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
         f"📌 <b>{sym}</b>  {_side_label(side)}\n"
         f"📈 TP1  <code>{_fp(tp1)}</code>  "
             f"<i>({_pct_price(entry, tp1)} dari entry)</i>\n\n"
-        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>(30% posisi)</i>\n"
+        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>({TP1_PCT*100:.0f}% posisi)</i>\n"
         f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
             f"<i>(dari ${partial_margin:.2f})</i>\n"
         f"💼 Balance       <code>${new_balance:.2f}</code>\n"
         f"🔒 Stop → Breakeven @ <code>{_fp(entry)}</code>\n"
-        f"⏳ Holding 70% ke TP2 / TP3{cascade_note}\n\n"
+        f"⏳ Holding {(1-TP1_PCT)*100:.0f}% ke TP2 / TP3{cascade_note}\n\n"
         f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
     )
     send_reply(msg, reply_to_message_id=tg_id)
@@ -261,7 +292,7 @@ def _handle_tp1_partial(trade: dict, cascade: bool = False) -> float:
 
 def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
     """
-    Partial close di TP2 (30% posisi).
+    Partial close di TP2 sesuai risk.tp_split[1].
     ✅ Update balance realtime
     ✅ Set SL ke TP1 price (trailing stop)
     Returns partial PnL.
@@ -270,17 +301,15 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
     sym    = trade['symbol']
     side   = trade['side']
     entry  = float(trade['entry_price'])
-    tp1    = float(trade['tp1'])
-    tp2    = float(trade['tp2'])
-    tp3    = float(trade['tp3'])
+    tp1, tp2, tp3 = _normalize_rr_targets(trade)
     qty    = float(trade['quantity'])
     lev    = int(trade.get('leverage', 1))
     tg_id  = trade.get('telegram_msg_id')
 
-    partial_qty    = qty * 0.30
+    partial_qty    = qty * TP2_PCT
     partial_pnl    = _calc_pnl(side, entry, tp2, partial_qty)
     full_margin    = _calc_margin(entry, qty, lev)
-    partial_margin = full_margin * 0.30
+    partial_margin = full_margin * TP2_PCT
 
     # ✅ Balance update realtime
     new_balance = _apply_partial_balance(partial_pnl, "TP2", sym)
@@ -302,12 +331,12 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
         f"📌 <b>{sym}</b>  {_side_label(side)}\n"
         f"📈 TP2  <code>{_fp(tp2)}</code>  "
             f"<i>({_pct_price(entry, tp2)} dari entry)</i>\n\n"
-        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>(30% posisi)</i>\n"
+        f"💰 Partial PnL   <code>${partial_pnl:+.4f}</code>  <i>({TP2_PCT*100:.0f}% posisi)</i>\n"
         f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
             f"<i>(dari ${partial_margin:.2f})</i>\n"
         f"💼 Balance       <code>${new_balance:.2f}</code>\n"
         f"🔒 Stop → TP1 @ <code>{_fp(tp1)}</code>\n"
-        f"⏳ Holding 40% ke TP3 @ <code>{_fp(tp3)}</code>  "
+        f"⏳ Holding {TP3_PCT*100:.0f}% ke TP3 @ <code>{_fp(tp3)}</code>  "
             f"<i>({_pct_price(entry, tp3)})</i>{cascade_note}\n\n"
         f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
     )

@@ -23,7 +23,14 @@ if sys.platform == "win32":
 
 from modules.config_loader import CONFIG
 from modules.exchange import BybitClient
-from modules.database import init_db, get_active_signals, save_signal_to_db
+from modules.database import (
+    init_db,
+    get_active_signals,
+    save_signal_to_db,
+    get_closed_trades_today,
+    get_trades_today,
+    get_paper_balance,
+)
 from modules.technicals import get_technicals, detect_divergence
 from modules.quant import calculate_metrics, check_fakeout
 from modules.derivatives import analyze_derivatives
@@ -60,6 +67,10 @@ logger = logging.getLogger("Main")
 # ─────────────────────────────────────────────────────────────────────────────
 AUTO_TRADE_ENABLED = CONFIG.get("auto_trade", False)
 DEBUG_MODE         = os.getenv("BOT_DEBUG", "").lower() == "true"
+RISK_CFG           = CONFIG.get("risk", {})
+DAILY_PROFIT_TARGET = RISK_CFG.get("daily_profit_target_pct", 0.015)
+MAX_DAILY_LOSS       = RISK_CFG.get("max_daily_loss_pct", 0.01)
+MAX_DAILY_TRADES     = RISK_CFG.get("max_daily_trades", 3)
 
 print("=" * 60)
 print("🤖 Bybit Screening Bot v8")
@@ -147,6 +158,97 @@ def calculate_rr(entry, sl, tp3) -> float:
         return 0.0
     risk = abs(entry - sl)
     return round(abs(tp3 - entry) / risk, 2) if risk > 0 else 0.0
+
+
+ATR_SL_MULTIPLIER = float(CONFIG.get("risk", {}).get("atr_sl_multiplier", 1.5))
+ATR_SL_LENGTH     = int(CONFIG.get("risk", {}).get("atr_sl_length", 14))
+STRATEGY_CFG      = CONFIG.get("strategy", {})
+MIN_ADX           = float(STRATEGY_CFG.get("min_adx", 18))
+MIN_TP1_DIST_PCT  = float(STRATEGY_CFG.get("min_tp1_distance_pct", 0.003))
+MIN_ATR_PCT       = float(STRATEGY_CFG.get("min_atr_pct", 0.0015))
+MAX_ATR_PCT       = float(STRATEGY_CFG.get("max_atr_pct", 0.03))
+REQUIRE_SL_BEYOND_SWING = bool(STRATEGY_CFG.get("require_sl_beyond_swing", True))
+SL_SWING_BUFFER_ATR     = float(STRATEGY_CFG.get("sl_swing_buffer_atr", 0.1))
+
+
+def resolve_atr(df: pd.DataFrame) -> float:
+    """
+    Ambil ATR terakhir dari candle yang sudah difetch.
+    Default fallback hitung ATR 14 langsung dari OHLCV jika perlu.
+    """
+    if df is None or df.empty:
+        return 0.0
+
+    try:
+        atr = ta.atr(df["high"], df["low"], df["close"], length=ATR_SL_LENGTH)
+        if atr is None or len(atr) == 0:
+            return 0.0
+        value = float(atr.iloc[-1])
+        if np.isfinite(value) and value > 0:
+            return value
+    except Exception as e:
+        logger.debug(f"resolve_atr fallback gagal: {type(e).__name__}: {e}")
+
+    return 0.0
+
+
+def build_rr_targets(entry: float, sl: float, side: str) -> tuple[float, float, float]:
+    """
+    Build TP levels from fixed risk distance:
+      TP1 = 1R, TP2 = 2R, TP3 = 3R
+    """
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return 0.0, 0.0, 0.0
+
+    if side == "Long":
+        return (
+            entry + risk * 1.0,
+            entry + risk * 2.0,
+            entry + risk * 3.0,
+        )
+    return (
+        entry - risk * 1.0,
+        entry - risk * 2.0,
+        entry - risk * 3.0,
+    )
+
+
+def entry_quality_reject_reason(
+    df: pd.DataFrame,
+    side: str,
+    entry: float,
+    sl: float,
+    tp1: float,
+    atr: float,
+    swing_high: float,
+    swing_low: float,
+) -> str | None:
+    if entry <= 0:
+        return "entry<=0"
+
+    adx = float(df["adx"].iloc[-1]) if "adx" in df.columns else 0.0
+    if MIN_ADX and adx < MIN_ADX:
+        return f"ADX {adx:.1f} < {MIN_ADX:.1f}"
+
+    atr_pct = atr / entry
+    if MIN_ATR_PCT and atr_pct < MIN_ATR_PCT:
+        return f"ATR {atr_pct:.2%} < min {MIN_ATR_PCT:.2%}"
+    if MAX_ATR_PCT and atr_pct > MAX_ATR_PCT:
+        return f"ATR {atr_pct:.2%} > max {MAX_ATR_PCT:.2%}"
+
+    tp1_dist = abs(tp1 - entry) / entry
+    if MIN_TP1_DIST_PCT and tp1_dist < MIN_TP1_DIST_PCT:
+        return f"TP1 distance {tp1_dist:.2%} < {MIN_TP1_DIST_PCT:.2%}"
+
+    if REQUIRE_SL_BEYOND_SWING:
+        buffer = atr * SL_SWING_BUFFER_ATR
+        if side == "Long" and sl > (swing_low - buffer):
+            return "SL not beyond swing low"
+        if side == "Short" and sl < (swing_high + buffer):
+            return "SL not beyond swing high"
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,18 +399,29 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             logger.debug(f"[{symbol}] skip — range=0 (harga flat?)")
             return None
 
+        atr = resolve_atr(df)
+        if atr <= 0:
+            counters["bad_setup"] += 1
+            logger.debug(f"[{symbol}] skip — ATR invalid/zero")
+            return None
+
         if side == "Long":
             entry = (swing_high - rng * s["fib_entry_start"] + swing_high - rng * s["fib_entry_end"]) / 2
-            sl    = swing_low  - rng * s["fib_sl"]
-            tp1   = swing_low  + rng
-            tp2   = swing_low  + rng * 1.618
-            tp3   = swing_low  + rng * 2.618
+            sl    = entry - (atr * ATR_SL_MULTIPLIER)
         else:
             entry = (swing_low + rng * s["fib_entry_start"] + swing_low + rng * s["fib_entry_end"]) / 2
-            sl    = swing_high + rng * s["fib_sl"]
-            tp1   = swing_high - rng
-            tp2   = swing_high - rng * 1.618
-            tp3   = swing_high - rng * 2.618
+            sl    = entry + (atr * ATR_SL_MULTIPLIER)
+
+        tp1, tp2, tp3 = build_rr_targets(entry, sl, side)
+
+        quality_reason = entry_quality_reject_reason(
+            df, side, entry, sl, tp1, atr, swing_high, swing_low
+        )
+        if quality_reason:
+            counters["entry_quality"] += 1
+            counters[f"entry_quality:{quality_reason.split()[0]}"] += 1
+            logger.debug(f"[{symbol}] skip — entry quality: {quality_reason}")
+            return None
 
         rr     = calculate_rr(entry, sl, tp3)
         min_rr = CONFIG["strategy"].get("risk_reward_min", 2.0)
@@ -393,6 +506,38 @@ def is_active_hour() -> bool:
     return start_h <= current_h < end_h
 
 
+def _account_balance_for_daily_guard() -> float:
+    if not AUTO_TRADE_ENABLED:
+        return get_paper_balance()
+    try:
+        balance_info = client.fetch_balance()
+        return float(balance_info["total"]["USDT"])
+    except Exception as e:
+        logger.debug(f"daily guard balance fetch failed: {e}")
+        return 0.0
+
+
+def daily_entry_limit_status() -> tuple[bool, str, int]:
+    trades_today = get_trades_today()
+    remaining = max(0, int(MAX_DAILY_TRADES or 0) - len(trades_today)) if MAX_DAILY_TRADES else 999999
+    if MAX_DAILY_TRADES and remaining <= 0:
+        return True, f"max daily trades {len(trades_today)}/{MAX_DAILY_TRADES}", 0
+
+    closed_today = get_closed_trades_today()
+    total_pnl = sum(float(t.get("pnl", 0)) for t in closed_today)
+    balance = _account_balance_for_daily_guard()
+    if balance <= 0:
+        return False, "", remaining
+
+    pnl_pct = total_pnl / balance
+    if DAILY_PROFIT_TARGET and pnl_pct >= DAILY_PROFIT_TARGET:
+        return True, f"daily target hit {pnl_pct:.2%} >= {DAILY_PROFIT_TARGET:.2%}", 0
+    if MAX_DAILY_LOSS and pnl_pct <= -MAX_DAILY_LOSS:
+        return True, f"daily loss hit {pnl_pct:.2%} <= -{MAX_DAILY_LOSS:.2%}", 0
+
+    return False, "", remaining
+
+
 def scan():
     # ✅ Cek pause flag dari Telegram /pause command
     if is_paused():
@@ -412,6 +557,11 @@ def scan():
     start_time = time.time()
     mode_label = "AUTO TRADE 🤖" if AUTO_TRADE_ENABLED else "SIGNAL ONLY 📡"
     logger.info(f"🔭 Scan dimulai | Mode: {mode_label}")
+
+    blocked, reason, max_new_signals = daily_entry_limit_status()
+    if blocked:
+        logger.info(f"🛑 Scan dilewati — {reason}")
+        return
 
     btc_bias = get_btc_bias()
     logger.info(f"📊 BTC Bias ({TREND_TF}): {btc_bias}")
@@ -448,6 +598,9 @@ def scan():
             for f in as_completed(futures):
                 res = f.result()
                 if res:
+                    if signal_count >= max_new_signals:
+                        counters["daily_trade_limit"] += 1
+                        continue
                     # ✅ send_alert now returns Telegram message_id (int) on success, None on failure
                     tg_msg_id = send_alert(res, auto_trade=AUTO_TRADE_ENABLED)
                     if tg_msg_id:
@@ -480,7 +633,13 @@ def scan():
             "low_tech_score": f"Tech score rendah (< {CONFIG['strategy']['min_tech_score']})",
             "low_rr":         f"R:R rendah (< {CONFIG['strategy'].get('risk_reward_min', 2.0)})",
             "entry_too_far":  f"Entry terlalu jauh dari harga saat ini (> {CONFIG['strategy'].get('max_entry_drift_pct', 0.03):.0%})",
+            "entry_quality":  "Entry quality filter fail",
+            "entry_quality:ADX": "Entry quality: ADX lemah",
+            "entry_quality:ATR": "Entry quality: ATR tidak ideal",
+            "entry_quality:TP1": "Entry quality: TP1 terlalu dekat",
+            "entry_quality:SL":  "Entry quality: SL swing rule",
             "bad_setup":      "Setup invalid (range=0)",
+            "daily_trade_limit": "Kuota trade harian sudah penuh",
             "duplicate":      "Duplikat signal aktif",
             "exception":      "⚠️  Exception (cek log!)",   # ← ini yang penting
         }

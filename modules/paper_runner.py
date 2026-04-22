@@ -29,6 +29,8 @@ from modules.database import (
     get_waiting_signals,
     mark_signal_ingested,
     get_closed_trades_last_24h,
+    get_closed_trades_today,
+    get_trades_today,
     get_paper_balance,
     save_daily_report,
 )
@@ -43,6 +45,9 @@ USE_MAX_LEVERAGE = RISK.get("use_max_leverage", False)   # True = pakai max lev 
 TARGET_LEV       = RISK["target_leverage"]               # Fallback / fixed leverage jika use_max_leverage=False
 RISK_PERCENT     = RISK["risk_percent"]
 MAX_POSITIONS    = RISK["max_positions"]
+MAX_DAILY_LOSS   = RISK.get("max_daily_loss_pct", 0.01)
+DAILY_TARGET     = RISK.get("daily_profit_target_pct", 0.015)
+MAX_DAILY_TRADES = RISK.get("max_daily_trades", 3)
 MODE             = "PAPER"
 
 # ─── Exchange (public-only — untuk harga & market info) ───────────────────
@@ -86,22 +91,40 @@ def _get_leverage_for(symbol: str) -> int:
 # SIGNAL INGESTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _daily_loss_limit_reached() -> bool:
-    """Return True jika total PnL hari ini melampaui batas rugi harian."""
-    max_loss_pct = RISK.get("max_daily_loss_pct", 0.10)
+def _daily_entry_limit_reached() -> bool:
+    """Return True jika target/loss/jumlah trade harian sudah membatasi entry baru."""
     try:
-        closed_today = get_closed_trades_last_24h()
+        trades_today = get_trades_today()
+        if MAX_DAILY_TRADES and len(trades_today) >= MAX_DAILY_TRADES:
+            logger.warning(
+                f"🛑 Daily trade limit reached — {len(trades_today)}/{MAX_DAILY_TRADES}. "
+                f"Tidak ada posisi baru dibuka."
+            )
+            return True
+
+        closed_today = get_closed_trades_today()
         total_pnl = sum(float(t.get("pnl", 0)) for t in closed_today)
         balance = get_paper_balance()
-        if balance > 0 and total_pnl < -(balance * max_loss_pct):
+        if balance <= 0:
+            return False
+
+        pnl_pct = total_pnl / balance
+        if DAILY_TARGET and pnl_pct >= DAILY_TARGET:
+            logger.warning(
+                f"✅ Daily profit target reached — PnL hari ini: ${total_pnl:.2f} "
+                f"({pnl_pct:.1%}) >= {DAILY_TARGET:.1%}. Tidak ada posisi baru dibuka."
+            )
+            return True
+
+        if MAX_DAILY_LOSS and pnl_pct <= -MAX_DAILY_LOSS:
             logger.warning(
                 f"🛑 Daily loss limit reached — PnL hari ini: ${total_pnl:.2f} "
-                f"({total_pnl / balance:.1%}) > -{max_loss_pct:.0%} limit. "
+                f"({pnl_pct:.1%}) <= -{MAX_DAILY_LOSS:.1%} limit. "
                 f"Tidak ada posisi baru dibuka."
             )
             return True
     except Exception as e:
-        logger.debug(f"_daily_loss_limit_reached check error: {e}")
+        logger.debug(f"_daily_entry_limit_reached check error: {e}")
     return False
 
 
@@ -110,8 +133,8 @@ def _ingest_signals():
     if count_open_active_trades() >= MAX_POSITIONS:
         return
 
-    # ✅ Circuit breaker: stop buka posisi baru jika daily loss limit tercapai
-    if _daily_loss_limit_reached():
+    # Circuit breaker: stop buka posisi baru jika target/loss/jumlah trade harian tercapai.
+    if _daily_entry_limit_reached():
         return
 
     client = _get_client()
@@ -122,6 +145,7 @@ def _ingest_signals():
         return
 
     open_count = count_open_active_trades()
+    daily_count = len(get_trades_today())
     signals = get_waiting_signals()
 
     if signals:
@@ -130,6 +154,9 @@ def _ingest_signals():
     for sig in signals:
         if open_count >= MAX_POSITIONS:
             logger.warning(f"⚠️  Max positions ({MAX_POSITIONS}) tercapai, sinyal ditunda")
+            break
+        if MAX_DAILY_TRADES and daily_count >= MAX_DAILY_TRADES:
+            logger.warning(f"⚠️  Max daily trades ({MAX_DAILY_TRADES}) tercapai, sinyal ditunda")
             break
 
         sym   = sig["symbol"]
@@ -170,6 +197,7 @@ def _ingest_signals():
         })
         mark_signal_ingested(sig["id"])
         open_count += 1
+        daily_count += 1
 
         lev_tag = f"MAX={final_lev}x" if USE_MAX_LEVERAGE else f"Fixed={final_lev}x"
         margin  = equity * RISK_PERCENT   # uang yang terkunci sebagai jaminan

@@ -185,6 +185,47 @@ def get_closed_trades_last_24h() -> list:
     return result
 
 
+def get_closed_trades_today() -> list:
+    today = datetime.now().date()
+    result = []
+    for r in _read(TRADES_F, default=[]):
+        if r.get('status') != 'CLOSED':
+            continue
+        try:
+            updated = datetime.fromisoformat(r['updated_at'])
+            if updated.date() == today:
+                result.append(r)
+        except Exception:
+            pass
+    return result
+
+
+def get_trades_last_24h() -> list:
+    since = datetime.now() - timedelta(hours=24)
+    result = []
+    for r in _read(TRADES_F, default=[]):
+        try:
+            created = datetime.fromisoformat(r.get('created_at', ''))
+            if created >= since:
+                result.append(r)
+        except Exception:
+            pass
+    return result
+
+
+def get_trades_today() -> list:
+    today = datetime.now().date()
+    result = []
+    for r in _read(TRADES_F, default=[]):
+        try:
+            created = datetime.fromisoformat(r.get('created_at', ''))
+            if created.date() == today:
+                result.append(r)
+        except Exception:
+            pass
+    return result
+
+
 # ─── Paper State ───────────────────────────────────────────
 
 def get_paper_balance() -> float:

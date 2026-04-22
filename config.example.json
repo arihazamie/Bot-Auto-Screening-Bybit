@@ -23,10 +23,14 @@
     "use_max_leverage": true,
     "target_leverage": 25,
     "risk_percent": 0.01,
-    "max_positions": 20,
-    "max_daily_loss_pct": 0.05,
-    "pending_expire_hours": 6,
-    "tp_split": [0.5, 0.25, 0.25],
+    "max_positions": 3,
+    "max_daily_loss_pct": 0.01,
+    "daily_profit_target_pct": 0.015,
+    "max_daily_trades": 3,
+    "pending_expire_hours": 3,
+    "tp_split": [0.4, 0.3, 0.3],
+    "atr_sl_multiplier": 1.5,
+    "atr_sl_length": 14,
     "paper_balance": 100.0
   },
 
@@ -45,7 +49,13 @@
     "min_smc_score": 2,
     "min_deriv_score": 2,
     "max_entry_drift_pct": 0.03,
-    "risk_reward_min": 2.5
+    "risk_reward_min": 2.5,
+    "min_adx": 15,
+    "min_tp1_distance_pct": 0.002,
+    "min_atr_pct": 0.001,
+    "max_atr_pct": 0.03,
+    "require_sl_beyond_swing": false,
+    "sl_swing_buffer_atr": 0
   },
 
   "indicators": {
