@@ -36,7 +36,7 @@ from modules.technicals import get_technicals, detect_divergence
 from modules.quant import calculate_metrics, check_fakeout
 from modules.derivatives import analyze_derivatives
 from modules.smc import analyze_smc
-from modules.patterns import find_pattern
+from modules.patterns import find_pattern, pattern_direction
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 from modules.paper_runner import start_paper_runner
 from modules.telegram_commands import start_command_listener, is_paused
@@ -221,6 +221,19 @@ SL_SWING_BUFFER_ATR     = float(STRATEGY_CFG.get("sl_swing_buffer_atr", 0.1))
 # Contoh: entry $100, min_sl_pct=0.005 → SL Long max $99.50, SL Short min $100.50
 # Config: tambahkan "min_sl_pct": 0.005 di bagian "strategy" untuk override.
 MIN_SL_PCT = float(STRATEGY_CFG.get("min_sl_pct", 0.005))  # default 0.5%
+
+# ─── FIX #08: Multi-TF Pattern Confluence ─────────────────────────────────────
+# Cek apakah higher timeframe (TREND_TF = 1h) juga menunjukkan pattern yang
+# SEARAH dengan entry signal. Jika 1h menampilkan pattern BERLAWANAN → reject.
+# Jika 1h tidak ada pattern sama sekali → lolos (tidak ada conflict).
+#
+# Rules:
+#   HTF pattern searah (Long+Long / Short+Short) → STRONG confluence ✅ lolos
+#   HTF tidak ada pattern                         → WEAK  confluence ✅ lolos
+#   HTF pattern berlawanan (Long vs Short)        → conflict ❌ reject
+#
+# Config: set "mtf_confluence_enabled": false di bagian "strategy" untuk disable.
+MTF_CONFLUENCE_ENABLED = bool(STRATEGY_CFG.get("mtf_confluence_enabled", True))
 
 # ─── FIX #5: Candle Confirmation ──────────────────────────────────────────────
 # Tunggu satu candle close setelah pattern terbentuk sebelum entry.
@@ -427,6 +440,81 @@ def _step_technicals_and_pattern(
         return None
 
     return df, pattern, side
+
+
+def _step_mtf_pattern_confluence(
+    symbol: str,
+    side: str,
+    counters: dict,
+) -> "tuple[str | None, str]":
+    """
+    FIX #08 — Multi-TF Pattern Confluence.
+
+    Fetch TREND_TF (1h) OHLCV dan jalankan find_pattern() di sana.
+    Bandingkan arah pattern 1h dengan arah entry signal 15m.
+
+    Returns:
+        (reject_reason, confluence_label)
+        - reject_reason : None jika lolos, "mtf_confluence_fail" jika harus skip
+        - confluence_label : "STRONG" | "WEAK" | "SKIP" (untuk logging & notif)
+
+    Logic:
+        HTF pattern searah   → (None, "STRONG")   ← lolos, konfirmasi berlapis
+        HTF tidak ada pattern → (None, "WEAK")     ← lolos, tidak ada konflik
+        HTF pattern berlawanan → ("mtf_confluence_fail", "CONFLICT") ← reject
+        MTF disabled / error   → (None, "SKIP")   ← bypass, jangan reject
+
+    Config: "mtf_confluence_enabled": false di bagian "strategy" untuk disable.
+    """
+    if not MTF_CONFLUENCE_ENABLED:
+        return None, "SKIP"
+
+    try:
+        min_candles = CONFIG["system"].get("min_candles_analysis", 150)
+        df_htf = client.fetch_ohlcv(symbol, TREND_TF, limit=min_candles + 50)
+
+        if df_htf is None or len(df_htf) < 50:
+            logger.debug(
+                f"[{symbol}] MTF confluence: data {TREND_TF} tidak cukup "
+                f"({len(df_htf) if df_htf is not None else 0} bars) — bypass"
+            )
+            return None, "SKIP"
+
+        htf_pattern = find_pattern(df_htf)
+
+        if htf_pattern is None:
+            # Tidak ada pattern jelas di 1h → tidak ada konflik, signal bisa lewat
+            logger.debug(f"[{symbol}] MTF confluence: tidak ada pattern di {TREND_TF} — WEAK (pass)")
+            return None, "WEAK"
+
+        htf_side = pattern_direction(htf_pattern)
+        if htf_side is None:
+            # pattern_direction tidak kenal pattern ini → bypass aman
+            logger.debug(
+                f"[{symbol}] MTF confluence: pattern '{htf_pattern}' arah tidak dikenal — bypass"
+            )
+            return None, "SKIP"
+
+        if htf_side == side:
+            logger.debug(
+                f"[{symbol}] ✅ MTF confluence STRONG: "
+                f"{ENTRY_TF}={side} + {TREND_TF}={htf_pattern}({htf_side})"
+            )
+            return None, f"STRONG({htf_pattern})"
+
+        # Berlawanan arah → conflict → reject
+        counters["mtf_confluence_fail"] += 1
+        logger.debug(
+            f"[{symbol}] ❌ MTF confluence CONFLICT: "
+            f"{ENTRY_TF} signal={side} vs {TREND_TF} pattern={htf_pattern}({htf_side})"
+        )
+        return "mtf_confluence_fail", "CONFLICT"
+
+    except Exception as e:
+        logger.debug(
+            f"[{symbol}] MTF confluence error: {type(e).__name__}: {e} — bypass"
+        )
+        return None, "SKIP"
 
 
 def _step_alignment_filters(
@@ -640,11 +728,12 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
     Return dict hasil jika lolos semua filter, None jika tidak.
 
     Pipeline:
-      _step_fetch_market_data()      → ticker + OHLCV
-      _step_technicals_and_pattern() → indicators + pattern + side
-      _step_alignment_filters()      → MTF & BTC bias
-      _step_score_filters()          → SMC, Quant, Deriv, Tech, RVOL
-      _step_build_trade_setup()      → entry (bid/ask), SL, TP, R:R
+      _step_fetch_market_data()        → ticker + OHLCV
+      _step_technicals_and_pattern()   → indicators + pattern + side
+      _step_alignment_filters()        → MTF & BTC bias
+      _step_mtf_pattern_confluence()   → FIX #08: pattern konfirmasi di 1h
+      _step_score_filters()            → SMC, Quant, Deriv, Tech, RVOL
+      _step_build_trade_setup()        → entry (bid/ask), SL, TP, R:R
     """
     if (symbol, ENTRY_TF) in active_signals:
         counters["duplicate"] += 1
@@ -669,6 +758,14 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
 
         step = "alignment_filters"
         if _step_alignment_filters(symbol, side, symbol_trend, btc_bias, counters):
+            return None
+
+        # FIX #08 — Multi-TF Pattern Confluence: cek pattern di TREND_TF juga
+        step = "mtf_pattern_confluence"
+        confluence_reject, confluence_label = _step_mtf_pattern_confluence(
+            symbol, side, counters
+        )
+        if confluence_reject:
             return None
 
         # FIX #5 — Candle Confirmation: pastikan pattern sudah close 1 candle penuh
@@ -696,7 +793,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
         )
         logger.info(
             f"✅ SIGNAL [{symbol}] {side} | {pattern} | {ENTRY_TF} | "
-            f"RR={setup['rr']} | Score={total_score} "
+            f"RR={setup['rr']} | Score={total_score} | Confluence={confluence_label} "
             f"(tech={scores['tech_score']} smc={scores['smc_score']} "
             f"quant={scores['quant_score']} deriv={scores['deriv_score']})"
         )
@@ -720,6 +817,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "Zeta_Score": float(scores["zeta_score"]),
             "OBI":        float(scores["obi"]),
             "BTC_Bias":   btc_bias,
+            "MTF_Confluence": confluence_label,        # FIX #08
             "Reason":     pattern,
             "Tech_Reasons":  ", ".join(str(r) for r in scores["tech_reasons"]),
             "Quant_Reasons": ", ".join(str(r) for r in scores["quant_reasons"]),
@@ -871,27 +969,28 @@ def scan():
         print()
         print(f"📊 Filter Breakdown — {total_filtered} pairs diproses:")
         labels = {
-            "no_ticker":      "Ticker kosong / invalid",
-            "no_candles":     "OHLCV tidak cukup",
-            "no_pattern":     "Tidak ada pattern",
-            "mtf_conflict":   "MTF conflict (1h vs 15m)",
-            "btc_filter":     "BTC bias conflict",
-            "smc_fail":       "SMC fail",
-            "deriv_fail":     "Derivatives fail",
-            "low_rvol":       f"RVOL rendah (< {CONFIG['indicators']['min_rvol']}x)",
-            "low_tech_score": f"Tech score rendah (< {CONFIG['strategy']['min_tech_score']})",
-            "low_rr":         f"R:R rendah (< {CONFIG['strategy'].get('risk_reward_min', 2.0)})",
-            "entry_too_far":  f"Entry terlalu jauh dari harga saat ini (> {CONFIG['strategy'].get('max_entry_drift_pct', 0.03):.0%})",
-            "entry_quality":  "Entry quality filter fail",
-            "entry_quality:ADX": "Entry quality: ADX lemah",
-            "entry_quality:ATR": "Entry quality: ATR tidak ideal",
-            "entry_quality:TP1": "Entry quality: TP1 terlalu dekat",
-            "entry_quality:SL":  "Entry quality: SL swing rule",
-            "candle_wait":    "Menunggu konfirmasi candle close (FIX #5)",
-            "bad_setup":      "Setup invalid (range=0)",
-            "daily_trade_limit": "Kuota trade harian sudah penuh",
-            "duplicate":      "Duplikat signal aktif",
-            "exception":      "⚠️  Exception (cek log!)",   # ← ini yang penting
+            "no_ticker":           "Ticker kosong / invalid",
+            "no_candles":          "OHLCV tidak cukup",
+            "no_pattern":          "Tidak ada pattern",
+            "mtf_conflict":        "MTF conflict — Supertrend (1h vs 15m)",
+            "mtf_confluence_fail": f"MTF confluence fail — pattern {TREND_TF} berlawanan (FIX #08)",
+            "btc_filter":          "BTC bias conflict",
+            "smc_fail":            "SMC fail",
+            "deriv_fail":          "Derivatives fail",
+            "low_rvol":            f"RVOL rendah (< {CONFIG['indicators']['min_rvol']}x)",
+            "low_tech_score":      f"Tech score rendah (< {CONFIG['strategy']['min_tech_score']})",
+            "low_rr":              f"R:R rendah (< {CONFIG['strategy'].get('risk_reward_min', 2.0)})",
+            "entry_too_far":       f"Entry terlalu jauh dari harga saat ini (> {CONFIG['strategy'].get('max_entry_drift_pct', 0.03):.0%})",
+            "entry_quality":       "Entry quality filter fail",
+            "entry_quality:ADX":   "Entry quality: ADX lemah",
+            "entry_quality:ATR":   "Entry quality: ATR tidak ideal",
+            "entry_quality:TP1":   "Entry quality: TP1 terlalu dekat",
+            "entry_quality:SL":    "Entry quality: SL swing rule",
+            "candle_wait":         "Menunggu konfirmasi candle close (FIX #5)",
+            "bad_setup":           "Setup invalid (range=0)",
+            "daily_trade_limit":   "Kuota trade harian sudah penuh",
+            "duplicate":           "Duplikat signal aktif",
+            "exception":           "⚠️  Exception (cek log!)",
         }
         for key, label in labels.items():
             val = counters.get(key, 0)

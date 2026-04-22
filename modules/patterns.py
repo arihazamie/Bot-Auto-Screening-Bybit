@@ -16,6 +16,34 @@ from modules.config_loader import CONFIG
 
 logger = logging.getLogger("Patterns")
 
+# ─── Pattern Direction Registry ───────────────────────────────────────────────
+# Digunakan oleh MTF confluence check untuk menentukan apakah pattern pada
+# higher timeframe searah atau berlawanan dengan signal entry timeframe.
+BULLISH_PATTERNS: frozenset = frozenset({
+    "double_bottom",
+    "bull_flag",
+    "ascending_triangle",
+    "bullish_rectangle",
+})
+
+BEARISH_PATTERNS: frozenset = frozenset({
+    "double_top",
+    "bear_flag",
+    "descending_triangle",
+})
+
+
+def pattern_direction(pattern: str) -> str | None:
+    """
+    Return arah sinyal dari sebuah pattern.
+    Return 'Long', 'Short', atau None jika pattern tidak dikenal.
+    """
+    if pattern in BULLISH_PATTERNS:
+        return "Long"
+    if pattern in BEARISH_PATTERNS:
+        return "Short"
+    return None
+
 
 def get_slope(values):
     try:

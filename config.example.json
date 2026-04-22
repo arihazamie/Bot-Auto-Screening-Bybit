@@ -61,7 +61,10 @@
     "sl_swing_buffer_atr": 0,
     "btc_bias_adx_min": 20,
     "candle_confirmation": true,
-    "limit_order_offset_pct": 0.002
+    "limit_order_offset_pct": 0.002,
+    "min_sl_pct": 0.005,
+    "max_loss_per_trade_pct": 0.01,
+    "mtf_confluence_enabled": true
   },
 
   "indicators": {

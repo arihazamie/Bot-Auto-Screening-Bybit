@@ -174,6 +174,16 @@ def send_alert(data, auto_trade: bool = False):
         SEP  = "━━━━━━━━━━━━━━━━━━━━━━━"
         SEP2 = "─────────────────────────"
 
+        # ── Confluence indicator (FIX #08) ───────────────────────────────────
+        confluence_raw = data.get('MTF_Confluence', 'SKIP')
+        if confluence_raw.startswith("STRONG"):
+            htf_pat = confluence_raw.replace("STRONG(","").rstrip(")")
+            confluence_line = f"   MTF 1h  <code>✅ STRONG — {htf_pat.replace('_',' ')}</code>\n"
+        elif confluence_raw == "WEAK":
+            confluence_line = f"   MTF 1h  <code>〰 WEAK — no pattern</code>\n"
+        else:
+            confluence_line = ""
+
         text = (
             f"{SEP}\n"
             f"<b>{side_ico}</b>  ·  <b>{symbol}</b>\n"
@@ -202,7 +212,8 @@ def send_alert(data, auto_trade: bool = False):
             f"   OBI     <code>{obi_val:+.4f}</code>  {obi_ico}\n"
             f"   Z-Score <code>{z_score:.2f}σ</code>  ζ <code>{zeta:.1f}/100</code>\n"
             f"   Funding <code>{fund_pct:.4f}%</code>  {fund_ico}\n"
-            f"   Basis   <code>{basis_pct:+.4f}%</code>\n\n"
+            f"   Basis   <code>{basis_pct:+.4f}%</code>\n"
+            f"{confluence_line}\n"
 
             f"💡 <i>{reason_line}</i>\n\n"
 
