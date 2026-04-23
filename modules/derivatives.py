@@ -88,21 +88,19 @@ def analyze_derivatives(df, ticker, side):
         reasons.append(f"Funding Favors Long ({funding:.4f})")
 
     # ── 2. CVD Calculation ────────────────────────────────────────────────────
-    # FIX #6: VWAP-based approximation menggantikan binary close>open.
-    # Metode lama mengabaikan wick -- pada futures Bybit taker aggressor
-    # sering terjadi di wick, bukan di close. Pendekatan baru:
-    #   buy_vol  = volume x (close - low)  / (high - low + epsilon)
-    #   sell_vol = volume x (high - close) / (high - low + epsilon)
-    #   delta    = buy_vol - sell_vol
-    # Hasilnya lebih akurat karena memperhitungkan tekanan intra-candle
-    # secara proporsional -- bukan hanya lihat close > open.
+    # FIX #04 (Improve): VWAP-Weighted Delta — formula eksplisit berbasis wick.
+    # buy_vol  = volume × (close − low)  / (high − low + ε)
+    # sell_vol = volume × (high − close) / (high − low + ε)
+    # Epsilon bersifat aditif (bukan clip) — konsisten dengan formula referensi.
+    # Hasilnya proporsional terhadap posisi close di dalam body candle, sehingga
+    # wick panjang yang umum di Bybit futures terbaca secara akurat.
     if "CVD" not in df.columns:
-        hl_range    = (df["high"] - df["low"]).clip(lower=1e-12)
-        df["delta"] = (
-            df["volume"] * (df["close"] - df["low"])  / hl_range
-            - df["volume"] * (df["high"] - df["close"]) / hl_range
-        )
-        df["CVD"]   = df["delta"].cumsum()
+        eps          = 1e-12                                          # ε — guard div-by-zero
+        hl_range     = df["high"] - df["low"] + eps                  # high − low + ε
+        buy_vol      = df["volume"] * (df["close"] - df["low"])  / hl_range   # taker-buy pressure
+        sell_vol     = df["volume"] * (df["high"] - df["close"]) / hl_range   # taker-sell pressure
+        df["delta"]  = buy_vol - sell_vol
+        df["CVD"]    = df["delta"].cumsum()
 
     # ── 3. CVD Divergence Analysis (Price Slope vs CVD Slope) ────────────────
     p_slope   = get_slope(df["close"].iloc[-10:])

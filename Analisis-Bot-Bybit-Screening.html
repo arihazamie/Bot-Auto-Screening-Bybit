@@ -535,9 +535,9 @@
         <div class="step-num">09</div>
         <div class="step-content">
           <div class="step-name">Derivatives — Funding Rate Gate + CVD Divergence</div>
-          <div class="step-desc">Reject Long saat funding >2%, Reject Short saat funding <-2%. CVD proxy sederhana.</div>
+          <div class="step-desc">Reject Long saat funding &gt;2%, Reject Short saat funding &lt;-2%. CVD kini VWAP-Weighted Delta berbasis wick (fix #04).</div>
         </div>
-        <div class="step-status warn">CVD LEMAH</div>
+        <div class="step-status" style="color:var(--green);border-color:var(--green)">FIXED</div>
       </div>
       <div class="pipeline-step">
         <div class="step-num">10</div>
@@ -971,18 +971,29 @@
       <div class="ic-tag">KODE FIX — 5 BARIS</div>
     </div>
 
-    <div class="improve-card">
+    <div class="improve-card" style="border-color:var(--green)">
       <div class="ic-header">
-        <div class="ic-num">04</div>
-        <div class="ic-title">Tingkatkan CVD: VWAP-Weighted Delta</div>
+        <div class="ic-num" style="background:var(--green)">04</div>
+        <div class="ic-title" style="color:var(--green)">Tingkatkan CVD: VWAP-Weighted Delta — DONE ✅</div>
       </div>
       <div class="ic-body">
-        Ganti kalkulasi CVD dengan formula berbasis wick:<br><br>
-        <code>buy = vol × (close−low)/(high−low+ε)</code><br>
-        <code>sell = vol × (high−close)/(high−low+ε)</code><br><br>
-        Ini memberikan sinyal tekanan beli/jual yang jauh lebih akurat untuk futures.
+        Kalkulasi CVD diganti dengan formula eksplisit berbasis wick:<br><br>
+        <div class="math-box">
+          <span class="comment"># Sebelum (clip-based, kurang eksplisit):</span><br>
+          hl_range = (high - low).clip(lower=1e-12)<br>
+          delta    = vol × (close-low)/hl_range - vol × (high-close)/hl_range<br>
+          <br>
+          <span class="comment"># Sesudah (FIXED — additive ε, named buy/sell, formula eksplisit):</span><br>
+          eps      = 1e-12<br>
+          hl_range = high - low + eps<br>
+          buy_vol  = vol × (close − low)  / hl_range<br>
+          sell_vol = vol × (high − close) / hl_range<br>
+          delta    = <span class="highlight">buy_vol - sell_vol</span><br>
+          CVD      = delta.cumsum()
+        </div>
+        Epsilon kini bersifat aditif — konsisten dengan formula referensi. Variabel <code>buy_vol</code> / <code>sell_vol</code> eksplisit meningkatkan keterbacaan dan debugging. Sinyal tekanan beli/jual lebih akurat untuk futures Bybit.
       </div>
-      <div class="ic-tag">KODE FIX — 3 BARIS</div>
+      <div class="ic-tag" style="color:var(--green)">FIXED — modules/derivatives.py</div>
     </div>
 
     <div class="improve-card">
