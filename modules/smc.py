@@ -81,6 +81,15 @@ def find_order_blocks(df, lookback: int = 50) -> dict:
     """
     Only returns FRESH OBs — mitigated OBs (price re-entered zone after formation)
     are discarded so they cannot generate stale signals.
+
+    FIX #7 — Mitigation logic pakai body close, bukan wick low/high.
+    Sebelumnya: mitigated jika candle LOW mana pun <= ob_high * 1.001 (terlalu sensitif).
+    Wick kecil yang menyentuh zona lalu rebound kuat langsung mendisqualifikasi OB.
+
+    Sesudah: mitigated hanya jika candle CLOSE masuk ke dalam zona OB (body penetration).
+    Wick yang masuk zona lalu close di luar = OB masih fresh dan valid.
+      - Bullish OB: mitigated jika ada close <= ob_high  (body masuk ke OB)
+      - Bearish OB: mitigated jika ada close >= ob_low   (body masuk ke OB)
     """
     obs = {"bull": [], "bear": []}
     n   = len(df)
@@ -92,16 +101,18 @@ def find_order_blocks(df, lookback: int = 50) -> dict:
         # Bullish OB: bearish candle → engulfing bullish
         if df["close"].iloc[i] < df["open"].iloc[i]:
             if i + 1 < n and df["close"].iloc[i + 1] > ob_high:
-                future    = df["low"].iloc[i + 2 :]
-                mitigated = (future <= ob_high * 1.001).any()
+                # FIX #7: cek close (body), bukan low (wick) — wick touch tidak invalidate OB
+                future_close = df["close"].iloc[i + 2 :]
+                mitigated    = (future_close <= ob_high).any()
                 if not mitigated:
                     obs["bull"].append((ob_low, ob_high))
 
         # Bearish OB: bullish candle → engulfing bearish
         if df["close"].iloc[i] > df["open"].iloc[i]:
             if i + 1 < n and df["close"].iloc[i + 1] < ob_low:
-                future    = df["high"].iloc[i + 2 :]
-                mitigated = (future >= ob_low * 0.999).any()
+                # FIX #7: cek close (body), bukan high (wick) — wick touch tidak invalidate OB
+                future_close = df["close"].iloc[i + 2 :]
+                mitigated    = (future_close >= ob_low).any()
                 if not mitigated:
                     obs["bear"].append((ob_low, ob_high))
 

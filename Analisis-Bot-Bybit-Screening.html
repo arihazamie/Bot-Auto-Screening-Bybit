@@ -444,10 +444,10 @@
       <div class="value" style="color:var(--green)">7.5</div>
       <div class="sub">/ 10 — Zeta direction-aware, base score 0 ✅</div>
     </div>
-    <div class="summary-card blue">
+    <div class="summary-card" style="border-color:var(--green)">
       <div class="label">SMC Module</div>
-      <div class="value">7.5</div>
-      <div class="sub">/ 10 — Solid tapi OB logic riskan</div>
+      <div class="value" style="color:var(--green)">8.5</div>
+      <div class="sub">/ 10 — OB mitigation body-close fix ✅</div>
     </div>
     <div class="summary-card red">
       <div class="label">Backtesting</div>
@@ -734,17 +734,29 @@
       </div>
     </div>
 
-    <!-- ISSUE 7 -->
-    <div class="issue-card warning">
+    <!-- ISSUE 7 — FIXED -->
+    <div class="issue-card fixed">
       <div class="issue-header">
-        <div class="issue-title">🟠 #7 — OB Mitigation Logic Terlalu Sensitif</div>
-        <div class="badge warning">WARNING</div>
+        <div class="issue-title">✅ #7 — OB Mitigation Logic Terlalu Sensitif <span style="font-size:11px;color:var(--green)">[FIXED]</span></div>
+        <div class="badge fixed">FIXED</div>
       </div>
       <div class="issue-body">
-        Di <code>find_order_blocks()</code>, sebuah bullish OB dinyatakan "mitigated" jika candle LOW mana pun setelah OB menyentuh <code>ob_high × 1.001</code>. Ini terlalu agresif — bahkan satu candle kecil yang wicking ke zona OB akan mendisualifikasi OB tersebut meskipun harga langsung rebound kuat.
-        <div class="issue-impact warning">
-          <div class="impact-label">Dampak Implementasi</div>
-          Fresh OB terlalu jarang ditemukan karena terlalu banyak yang dianggap sudah mitigated. SMC score akan sering rendah bukan karena tidak ada OB, tapi karena OB valid pun di-exclude. Ini menurunkan sensitivitas signal.
+        <strong>Root cause:</strong> Di <code>find_order_blocks()</code>, mitigation dicek pakai <code>df["low"] &lt;= ob_high × 1.001</code>. Satu wick kecil yang menyentuh zona OB lalu rebound langsung mendisqualifikasi OB tersebut — padahal secara SMC itu bukan mitigation yang sah.<br><br>
+        <strong>Fix yang diterapkan di <code>modules/smc.py</code>:</strong>
+        <div class="math-box">
+          <span class="comment"># Sebelum (BUG) — wick touch = mitigated:</span><br>
+          future    = df["low"].iloc[i + 2:]<br>
+          mitigated = (future &lt;= ob_high × 1.001).any()  <span class="err"># ← wick mana pun invalidate OB</span><br>
+          <br>
+          <span class="comment"># Sesudah (FIXED) — hanya body close yang mitigasi OB:</span><br>
+          future_close = df["close"].iloc[i + 2:]<br>
+          mitigated    = <span class="highlight">(future_close &lt;= ob_high).any()</span>  <span class="comment"># Bullish OB</span><br>
+          mitigated    = <span class="highlight">(future_close &gt;= ob_low).any()</span>   <span class="comment"># Bearish OB</span><br>
+          <span class="comment"># Wick masuk zona lalu close di luar = OB masih fresh ✓</span>
+        </div>
+        <div class="issue-impact" style="border-left:2px solid var(--green);padding-left:10px;margin-top:10px;">
+          <div class="impact-label" style="color:var(--green)">Status</div>
+          Fresh OB kini lebih sering ditemukan karena wick spike yang rebound tidak lagi mendisqualifikasi zona. SMC score menjadi lebih representatif — OB yang memang masih valid (belum ada candle yang close di dalam zona) tetap aktif sebagai signal.
         </div>
       </div>
     </div>
@@ -998,12 +1010,12 @@
     <div class="improve-card">
       <div class="ic-header">
         <div class="ic-num">07</div>
-        <div class="ic-title">OB Mitigation: Candle Close Filter</div>
+        <div class="ic-title" style="color:var(--green)">OB Mitigation: Candle Close Filter — DONE ✅</div>
       </div>
       <div class="ic-body">
-        Ubah OB mitigation dari "low menyentuh OB" menjadi "candle CLOSE di bawah OB high". Ini jauh lebih akurat secara SMC — wick ke zona tidak menganulir OB, hanya close yang melewatinya.
+        OB mitigation kini menggunakan <code>df["close"]</code> bukan <code>df["low"]</code>. Wick yang masuk zona lalu rebound tidak lagi mendisqualifikasi OB — hanya body close yang melewati batas OB yang dianggap mitigated.
       </div>
-      <div class="ic-tag">SMC IMPROVEMENT</div>
+      <div class="ic-tag" style="color:var(--green)">FIXED — modules/smc.py</div>
     </div>
 
     <div class="improve-card">
