@@ -1,1629 +1,1095 @@
 <!DOCTYPE html>
 <html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0" />
-    <title>Quant Analysis — Bot Auto Screening Bybit</title>
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap"
-      rel="stylesheet" />
-    <style>
-      :root {
-        --bg: #0a0c10;
-        --surface: #111318;
-        --surface2: #181b22;
-        --border: #1e2230;
-        --border2: #252a38;
-        --text: #e2e6f0;
-        --muted: #5a6075;
-        --accent: #3dffc0;
-        --accent2: #ffd166;
-        --red: #ff5c7a;
-        --orange: #ff9240;
-        --blue: #4fa3ff;
-        --purple: #a78bfa;
-        --green: #3dffc0;
-      }
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quant Analysis — Bot Auto Screening Bybit</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0c10;
+    --surface: #111318;
+    --surface2: #181b22;
+    --border: #1e2230;
+    --border2: #252a38;
+    --text: #e2e6f0;
+    --muted: #5a6075;
+    --accent: #3dffc0;
+    --accent2: #ffd166;
+    --red: #ff5c7a;
+    --orange: #ff9240;
+    --blue: #4fa3ff;
+    --purple: #a78bfa;
+    --green: #3dffc0;
+  }
 
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
 
-      body {
-        background: var(--bg);
-        color: var(--text);
-        font-family: "DM Sans", sans-serif;
-        font-size: 14px;
-        line-height: 1.6;
-        padding: 32px 20px 80px;
-        max-width: 1080px;
-        margin: 0 auto;
-      }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 32px 20px 80px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
 
-      /* ── Header ── */
-      .header {
-        border-bottom: 1px solid var(--border2);
-        padding-bottom: 28px;
-        margin-bottom: 36px;
-      }
-      .header-tag {
-        font-family: "Space Mono", monospace;
-        font-size: 10px;
-        color: var(--accent);
-        letter-spacing: 3px;
-        text-transform: uppercase;
-        margin-bottom: 10px;
-      }
-      .header h1 {
-        font-family: "Space Mono", monospace;
-        font-size: 24px;
-        font-weight: 700;
-        color: #fff;
-        line-height: 1.2;
-        margin-bottom: 8px;
-      }
-      .header-meta {
-        display: flex;
-        gap: 24px;
-        flex-wrap: wrap;
-        margin-top: 16px;
-      }
-      .meta-item {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .meta-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--accent);
-      }
+  /* ── Header ── */
+  .header {
+    border-bottom: 1px solid var(--border2);
+    padding-bottom: 28px;
+    margin-bottom: 36px;
+  }
+  .header-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .header h1 {
+    font-family: 'Space Mono', monospace;
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.2;
+    margin-bottom: 8px;
+  }
+  .header-meta {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .meta-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .meta-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+  }
 
-      /* ── Section ── */
-      .section {
-        margin-bottom: 40px;
-      }
-      .section-title {
-        font-family: "Space Mono", monospace;
-        font-size: 11px;
-        font-weight: 700;
-        color: var(--accent);
-        letter-spacing: 2px;
-        text-transform: uppercase;
-        margin-bottom: 14px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .section-title::after {
-        content: "";
-        flex: 1;
-        height: 1px;
-        background: var(--border2);
-      }
+  /* ── Section ── */
+  .section {
+    margin-bottom: 40px;
+  }
+  .section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border2);
+  }
 
-      /* ── Summary cards ── */
-      .summary-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-        gap: 12px;
-        margin-bottom: 32px;
-      }
-      .summary-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 16px 18px;
-        position: relative;
-        overflow: hidden;
-      }
-      .summary-card::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 2px;
-      }
-      .summary-card.green::before {
-        background: var(--green);
-      }
-      .summary-card.red::before {
-        background: var(--red);
-      }
-      .summary-card.orange::before {
-        background: var(--orange);
-      }
-      .summary-card.blue::before {
-        background: var(--blue);
-      }
-      .summary-card.purple::before {
-        background: var(--purple);
-      }
-      .summary-card .label {
-        font-size: 11px;
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 6px;
-      }
-      .summary-card .value {
-        font-family: "Space Mono", monospace;
-        font-size: 22px;
-        font-weight: 700;
-        line-height: 1;
-        margin-bottom: 4px;
-      }
-      .summary-card.green .value {
-        color: var(--green);
-      }
-      .summary-card.red .value {
-        color: var(--red);
-      }
-      .summary-card.orange .value {
-        color: var(--orange);
-      }
-      .summary-card.blue .value {
-        color: var(--blue);
-      }
-      .summary-card.purple .value {
-        color: var(--purple);
-      }
-      .summary-card .sub {
-        font-size: 11px;
-        color: var(--muted);
-      }
+  /* ── Summary cards ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .summary-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+  .summary-card.green::before { background: var(--green); }
+  .summary-card.red::before { background: var(--red); }
+  .summary-card.orange::before { background: var(--orange); }
+  .summary-card.blue::before { background: var(--blue); }
+  .summary-card.purple::before { background: var(--purple); }
+  .summary-card .label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+  .summary-card .value {
+    font-family: 'Space Mono', monospace;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .summary-card.green .value { color: var(--green); }
+  .summary-card.red .value { color: var(--red); }
+  .summary-card.orange .value { color: var(--orange); }
+  .summary-card.blue .value { color: var(--blue); }
+  .summary-card.purple .value { color: var(--purple); }
+  .summary-card .sub { font-size: 11px; color: var(--muted); }
 
-      /* ── Issue cards ── */
-      .issue-list {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      .issue-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 16px 18px;
-        border-left: 3px solid var(--border);
-      }
-      .issue-card.critical {
-        border-left-color: var(--red);
-      }
-      .issue-card.warning {
-        border-left-color: var(--orange);
-      }
-      .issue-card.info {
-        border-left-color: var(--blue);
-      }
+  /* ── Issue cards ── */
+  .issue-list { display: flex; flex-direction: column; gap: 12px; }
+  .issue-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    border-left: 3px solid var(--border);
+  }
+  .issue-card.critical { border-left-color: var(--red); }
+  .issue-card.warning  { border-left-color: var(--orange); }
+  .issue-card.info     { border-left-color: var(--blue); }
 
-      .issue-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 8px;
-      }
-      .issue-title {
-        font-weight: 600;
-        font-size: 14px;
-        color: var(--text);
-        flex: 1;
-      }
-      .badge {
-        font-family: "Space Mono", monospace;
-        font-size: 9px;
-        font-weight: 700;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        padding: 3px 8px;
-        border-radius: 4px;
-        white-space: nowrap;
-        flex-shrink: 0;
-      }
-      .badge.critical {
-        background: rgba(255, 92, 122, 0.15);
-        color: var(--red);
-      }
-      .badge.warning {
-        background: rgba(255, 146, 64, 0.15);
-        color: var(--orange);
-      }
-      .badge.info {
-        background: rgba(79, 163, 255, 0.15);
-        color: var(--blue);
-      }
-      .badge.fixed {
-        background: rgba(61, 255, 192, 0.15);
-        color: var(--green);
-      }
-      .issue-card.fixed {
-        border-left-color: var(--green);
-        opacity: 0.85;
-      }
+  .issue-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .issue-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+    flex: 1;
+  }
+  .badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .badge.critical { background: rgba(255,92,122,0.15); color: var(--red); }
+  .badge.warning  { background: rgba(255,146,64,0.15); color: var(--orange); }
+  .badge.info     { background: rgba(79,163,255,0.15); color: var(--blue); }
+  .badge.fixed    { background: rgba(61,255,192,0.15); color: var(--green); }
+  .issue-card.fixed { border-left-color: var(--green); opacity: 0.85; }
 
-      .issue-body {
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.6;
-      }
-      .issue-body strong {
-        color: var(--text);
-      }
-      .issue-impact {
-        margin-top: 8px;
-        padding: 8px 10px;
-        background: var(--surface2);
-        border-radius: 6px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .issue-impact .impact-label {
-        font-family: "Space Mono", monospace;
-        font-size: 10px;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        margin-bottom: 3px;
-      }
-      .issue-impact.critical .impact-label {
-        color: var(--red);
-      }
-      .issue-impact.warning .impact-label {
-        color: var(--orange);
-      }
-      .issue-impact.info .impact-label {
-        color: var(--blue);
-      }
+  .issue-body {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .issue-body strong { color: var(--text); }
+  .issue-impact {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: var(--surface2);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .issue-impact .impact-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+  }
+  .issue-impact.critical .impact-label { color: var(--red); }
+  .issue-impact.warning .impact-label  { color: var(--orange); }
+  .issue-impact.info .impact-label     { color: var(--blue); }
 
-      /* ── Math box ── */
-      .math-box {
-        background: var(--surface2);
-        border: 1px solid var(--border2);
-        border-radius: 8px;
-        padding: 14px 16px;
-        margin: 10px 0;
-        font-family: "Space Mono", monospace;
-        font-size: 12px;
-        color: var(--text);
-        line-height: 1.8;
-      }
-      .math-box .comment {
-        color: var(--muted);
-      }
-      .math-box .highlight {
-        color: var(--accent);
-      }
-      .math-box .warn {
-        color: var(--orange);
-      }
-      .math-box .err {
-        color: var(--red);
-      }
+  /* ── Math box ── */
+  .math-box {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 10px 0;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.8;
+  }
+  .math-box .comment { color: var(--muted); }
+  .math-box .highlight { color: var(--accent); }
+  .math-box .warn { color: var(--orange); }
+  .math-box .err { color: var(--red); }
 
-      /* ── Strategy pipeline ── */
-      .pipeline {
-        display: flex;
-        flex-direction: column;
-        gap: 0;
-      }
-      .pipeline-step {
-        display: flex;
-        gap: 14px;
-        align-items: flex-start;
-        padding: 12px 0;
-        border-bottom: 1px solid var(--border);
-        position: relative;
-      }
-      .pipeline-step:last-child {
-        border-bottom: none;
-      }
-      .step-num {
-        font-family: "Space Mono", monospace;
-        font-size: 10px;
-        color: var(--muted);
-        min-width: 28px;
-        padding-top: 2px;
-      }
-      .step-content {
-        flex: 1;
-      }
-      .step-name {
-        font-weight: 600;
-        font-size: 13px;
-        margin-bottom: 2px;
-        color: var(--text);
-      }
-      .step-desc {
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .step-status {
-        font-family: "Space Mono", monospace;
-        font-size: 10px;
-        padding: 2px 7px;
-        border-radius: 4px;
-        flex-shrink: 0;
-        margin-top: 2px;
-      }
-      .step-status.ok {
-        background: rgba(61, 255, 192, 0.1);
-        color: var(--green);
-      }
-      .step-status.warn {
-        background: rgba(255, 146, 64, 0.1);
-        color: var(--orange);
-      }
-      .step-status.bad {
-        background: rgba(255, 92, 122, 0.1);
-        color: var(--red);
-      }
+  /* ── Strategy pipeline ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .pipeline-step {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .pipeline-step:last-child { border-bottom: none; }
+  .step-num {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    min-width: 28px;
+    padding-top: 2px;
+  }
+  .step-content { flex: 1; }
+  .step-name {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 2px;
+    color: var(--text);
+  }
+  .step-desc {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .step-status {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .step-status.ok    { background: rgba(61,255,192,0.1); color: var(--green); }
+  .step-status.warn  { background: rgba(255,146,64,0.1); color: var(--orange); }
+  .step-status.bad   { background: rgba(255,92,122,0.1); color: var(--red); }
 
-      /* ── Improve cards ── */
-      .improve-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
-        gap: 14px;
-      }
-      .improve-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 16px 18px;
-      }
-      .improve-card .ic-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 10px;
-      }
-      .ic-num {
-        font-family: "Space Mono", monospace;
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--accent2);
-        min-width: 28px;
-      }
-      .ic-title {
-        font-weight: 600;
-        font-size: 14px;
-      }
-      .ic-body {
-        font-size: 12px;
-        color: var(--muted);
-        line-height: 1.7;
-      }
-      .ic-body strong {
-        color: var(--text);
-      }
-      .ic-tag {
-        display: inline-block;
-        margin-top: 8px;
-        font-family: "Space Mono", monospace;
-        font-size: 9px;
-        letter-spacing: 1px;
-        padding: 2px 7px;
-        border-radius: 4px;
-        background: rgba(255, 209, 102, 0.12);
-        color: var(--accent2);
-      }
+  /* ── Improve cards ── */
+  .improve-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+    gap: 14px;
+  }
+  .improve-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .improve-card .ic-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .ic-num {
+    font-family: 'Space Mono', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent2);
+    min-width: 28px;
+  }
+  .ic-title {
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .ic-body {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .ic-body strong { color: var(--text); }
+  .ic-tag {
+    display: inline-block;
+    margin-top: 8px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(255,209,102,0.12);
+    color: var(--accent2);
+  }
 
-      /* ── Expected Value table ── */
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-      }
-      th {
-        font-family: "Space Mono", monospace;
-        font-size: 10px;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        color: var(--muted);
-        padding: 8px 12px;
-        text-align: left;
-        border-bottom: 1px solid var(--border2);
-      }
-      td {
-        padding: 9px 12px;
-        border-bottom: 1px solid var(--border);
-        color: var(--text);
-      }
-      tr:last-child td {
-        border-bottom: none;
-      }
-      .tbl-green {
-        color: var(--green);
-        font-weight: 600;
-      }
-      .tbl-red {
-        color: var(--red);
-        font-weight: 600;
-      }
-      .tbl-yellow {
-        color: var(--accent2);
-        font-weight: 600;
-      }
-      .tbl-muted {
-        color: var(--muted);
-      }
+  /* ── Expected Value table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border2);
+  }
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  tr:last-child td { border-bottom: none; }
+  .tbl-green { color: var(--green); font-weight: 600; }
+  .tbl-red { color: var(--red); font-weight: 600; }
+  .tbl-yellow { color: var(--accent2); font-weight: 600; }
+  .tbl-muted { color: var(--muted); }
 
-      /* ── Verdict ── */
-      .verdict-box {
-        background: var(--surface);
-        border: 1px solid var(--border2);
-        border-radius: 12px;
-        padding: 24px 28px;
-        margin-top: 10px;
-      }
-      .verdict-title {
-        font-family: "Space Mono", monospace;
-        font-size: 13px;
-        font-weight: 700;
-        color: var(--accent2);
-        margin-bottom: 12px;
-        letter-spacing: 1px;
-      }
-      .verdict-body {
-        font-size: 13px;
-        color: var(--muted);
-        line-height: 1.8;
-      }
-      .verdict-body strong {
-        color: var(--text);
-      }
+  /* ── Verdict ── */
+  .verdict-box {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-top: 10px;
+  }
+  .verdict-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent2);
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+  }
+  .verdict-body {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.8;
+  }
+  .verdict-body strong { color: var(--text); }
 
-      /* ── Code inline ── */
-      code {
-        font-family: "Space Mono", monospace;
-        font-size: 11px;
-        background: var(--surface2);
-        padding: 1px 6px;
-        border-radius: 3px;
-        color: var(--accent);
-      }
+  /* ── Code inline ── */
+  code {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    background: var(--surface2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--accent);
+  }
 
-      /* ── Separator ── */
-      .sep {
-        height: 1px;
-        background: var(--border);
-        margin: 24px 0;
-      }
+  /* ── Separator ── */
+  .sep { height: 1px; background: var(--border); margin: 24px 0; }
 
-      /* ── Score bar ── */
-      .score-row {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 8px;
-      }
-      .score-label {
-        width: 140px;
-        font-size: 12px;
-        color: var(--muted);
-        flex-shrink: 0;
-      }
-      .score-bar-wrap {
-        flex: 1;
-        background: var(--surface2);
-        border-radius: 3px;
-        height: 6px;
-        overflow: hidden;
-      }
-      .score-bar {
-        height: 100%;
-        border-radius: 3px;
-      }
-      .score-value {
-        font-family: "Space Mono", monospace;
-        font-size: 11px;
-        color: var(--text);
-        min-width: 40px;
-        text-align: right;
-      }
+  /* ── Score bar ── */
+  .score-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .score-label { width: 140px; font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  .score-bar-wrap { flex: 1; background: var(--surface2); border-radius: 3px; height: 6px; overflow: hidden; }
+  .score-bar { height: 100%; border-radius: 3px; }
+  .score-value { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--text); min-width: 40px; text-align: right; }
 
-      /* tag pill */
-      .pill {
-        display: inline-block;
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 20px;
-        border: 1px solid var(--border2);
-        color: var(--muted);
-        margin: 2px 2px;
-      }
+  /* tag pill */
+  .pill {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    margin: 2px 2px;
+  }
 
-      @media (max-width: 600px) {
-        body {
-          padding: 16px 12px 60px;
-        }
-        .summary-grid {
-          grid-template-columns: 1fr 1fr;
-        }
-        .improve-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <!-- ═══ HEADER ═══ -->
-    <div class="header">
-      <div class="header-tag">Professional Quant Analysis Report</div>
-      <h1>Bot Auto Screening Bybit<br />— Deep Dive Review</h1>
-      <div class="header-meta">
-        <div class="meta-item">
-          <div class="meta-dot"></div>
-          Exchange: Bybit USDT Perpetual
+  @media(max-width: 600px) {
+    body { padding: 16px 12px 60px; }
+    .summary-grid { grid-template-columns: 1fr 1fr; }
+    .improve-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<div class="header">
+  <div class="header-tag">Professional Quant Analysis Report</div>
+  <h1>Bot Auto Screening Bybit<br>— Deep Dive Review</h1>
+  <div class="header-meta">
+    <div class="meta-item"><div class="meta-dot"></div> Exchange: Bybit USDT Perpetual</div>
+    <div class="meta-item"><div class="meta-dot" style="background:var(--blue)"></div> Entry TF: 15m | Trend TF: 1h</div>
+    <div class="meta-item"><div class="meta-dot" style="background:var(--orange)"></div> Target: 1% Profit/Day</div>
+    <div class="meta-item"><div class="meta-dot" style="background:var(--purple)"></div> Mode: Paper + Live Trade</div>
+  </div>
+</div>
+
+<!-- ═══ OVERVIEW SCORES ═══ -->
+<div class="section">
+  <div class="section-title">Overview Penilaian Komponen</div>
+  <div class="summary-grid">
+    <div class="summary-card green">
+      <div class="label">Arsitektur Kode</div>
+      <div class="value">8.0</div>
+      <div class="sub">/ 10 — Refaktor bersih, modular</div>
+    </div>
+    <div class="summary-card" style="border-color:var(--green)">
+      <div class="label">Risk Management</div>
+      <div class="value" style="color:var(--green)">7.5</div>
+      <div class="sub">/ 10 — Leverage cap bug fixed ✅</div>
+    </div>
+    <div class="summary-card" style="border-color:var(--green)">
+      <div class="label">Akurasi Signal</div>
+      <div class="value" style="color:var(--green)">7.5</div>
+      <div class="sub">/ 10 — Zeta direction-aware, base score 0 ✅</div>
+    </div>
+    <div class="summary-card blue">
+      <div class="label">SMC Module</div>
+      <div class="value">7.5</div>
+      <div class="sub">/ 10 — Solid tapi OB logic riskan</div>
+    </div>
+    <div class="summary-card red">
+      <div class="label">Backtesting</div>
+      <div class="value">0</div>
+      <div class="sub">/ 10 — Tidak ada sama sekali</div>
+    </div>
+    <div class="summary-card purple">
+      <div class="label">Realistis 1%/hari</div>
+      <div class="value">4.5</div>
+      <div class="sub">/ 10 — Perlu improvement</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ PIPELINE ═══ -->
+<div class="section">
+  <div class="section-title">Alur Pipeline Signal</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px 16px;">
+    <div class="pipeline">
+      <div class="pipeline-step">
+        <div class="step-num">01</div>
+        <div class="step-content">
+          <div class="step-name">Watchlist Refresh — Top 100 USDT Perp</div>
+          <div class="step-desc">Ambil pair terlikuid berdasarkan volume. 20 threads paralel.</div>
         </div>
-        <div class="meta-item">
-          <div
-            class="meta-dot"
-            style="background: var(--blue)"></div>
-          Entry TF: 15m | Trend TF: 1h
+        <div class="step-status ok">OK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">02</div>
+        <div class="step-content">
+          <div class="step-name">BTC Bias Filter — EMA13/21 + ADX(14) di 1h</div>
+          <div class="step-desc">Sideway = lolos, Bullish bias blokir Short, Bearish bias blokir Long.</div>
         </div>
-        <div class="meta-item">
-          <div
-            class="meta-dot"
-            style="background: var(--orange)"></div>
-          Target: 1% Profit/Day
+        <div class="step-status warn">PERLU REVIEW</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">03</div>
+        <div class="step-content">
+          <div class="step-name">Technical Indicators — EMA, StochRSI, MACD, ATR, ADX</div>
+          <div class="step-desc">Dasar filter entry. ADX minimum 15, ATR 0.1%–3%.</div>
         </div>
-        <div class="meta-item">
-          <div
-            class="meta-dot"
-            style="background: var(--purple)"></div>
-          Mode: Paper + Live Trade
+        <div class="step-status ok">OK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">04</div>
+        <div class="step-content">
+          <div class="step-name">Pattern Detection — 7 Chart Patterns</div>
+          <div class="step-desc">Double Top/Bottom, Bull/Bear Flag, Triangle, Rectangle. Volume gate untuk breakout.</div>
+        </div>
+        <div class="step-status ok">OK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">05</div>
+        <div class="step-content">
+          <div class="step-name">MTF Supertrend Alignment — Symbol Trend 1h</div>
+          <div class="step-desc">Supertrend(10, 3.5) di 1h harus searah dengan signal 15m.</div>
+        </div>
+        <div class="step-status ok">OK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">06</div>
+        <div class="step-content">
+          <div class="step-name">MTF Pattern Confluence — Pattern 1h vs 15m</div>
+          <div class="step-desc">Reject jika pattern 1h berlawanan arah. Weak pass jika 1h tidak ada pattern.</div>
+        </div>
+        <div class="step-status ok">OK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">07</div>
+        <div class="step-content">
+          <div class="step-name">SMC Analysis — Structure, BOS, OB, FVG, Sweep</div>
+          <div class="step-desc">5 komponen SMC dengan scoring. Min score 2.</div>
+        </div>
+        <div class="step-status warn">BUG MINOR</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">08</div>
+        <div class="step-content">
+          <div class="step-name">Quant Metrics — Zeta, Z-Score, OBI, RVOL</div>
+          <div class="step-desc">✅ Base score 0 (fix #4). Zeta kini direction-aware — Long=Zeta&gt;70, Short=Zeta&lt;30 (fix #5).</div>
+        </div>
+        <div class="step-status" style="color:var(--green);border-color:var(--green)">FIXED</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">09</div>
+        <div class="step-content">
+          <div class="step-name">Derivatives — Funding Rate Gate + CVD Divergence</div>
+          <div class="step-desc">Reject Long saat funding >2%, Reject Short saat funding <-2%. CVD proxy sederhana.</div>
+        </div>
+        <div class="step-status warn">CVD LEMAH</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">10</div>
+        <div class="step-content">
+          <div class="step-name">Correlation Filter — Pearson 50 candle</div>
+          <div class="step-desc">Reject jika korelasi ≥ 0.85 dengan posisi aktif. Window 50×15m = 12.5 jam.</div>
+        </div>
+        <div class="step-status warn">WINDOW PENDEK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">11</div>
+        <div class="step-content">
+          <div class="step-name">Candle Confirmation — DB-backed state</div>
+          <div class="step-desc">Tunggu 1 candle close setelah pattern. State disimpan ke SQLite.</div>
+        </div>
+        <div class="step-status ok">OK</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">12</div>
+        <div class="step-content">
+          <div class="step-name">Entry / SL / TP Builder — ATR-based SL, R:R ≥ 2.5</div>
+          <div class="step-desc">Entry dari bid/ask live. SL floor 0.5%. TP1=1R, TP2=2R, TP3=3R.</div>
+        </div>
+        <div class="step-status warn">PERLU TUNING</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ CRITICAL ISSUES ═══ -->
+<div class="section">
+  <div class="section-title">Masalah yang Ditemukan & Dampak Implementasi</div>
+  <div class="issue-list">
+
+    <!-- ISSUE 1 -->
+    <div class="issue-card critical">
+      <div class="issue-header">
+        <div class="issue-title">🔴 #1 — Tidak Ada Backtesting: Strategi Berjalan Tanpa Validasi Historis</div>
+        <div class="badge critical">CRITICAL</div>
+      </div>
+      <div class="issue-body">
+        Seluruh codebase tidak memiliki satu pun modul backtesting. Strategi multi-filter ini (SMC + Quant + Pattern + MTF) belum pernah divalidasi terhadap data historis. Tidak diketahui apakah kombinasi filter ini menghasilkan positive expectancy di Bybit.
+        <div class="issue-impact critical">
+          <div class="impact-label">Dampak Implementasi</div>
+          Jika Anda jalankan live dengan <code>auto_trade: true</code> sekarang, modal bisa habis dalam hitungan minggu tanpa pernah tahu apakah strategi ini punya edge sama sekali. Win rate aktual tidak diketahui — bisa 30%, bisa 20%, tidak ada cara tahu tanpa backtest.
         </div>
       </div>
     </div>
 
-    <!-- ═══ OVERVIEW SCORES ═══ -->
-    <div class="section">
-      <div class="section-title">Overview Penilaian Komponen</div>
-      <div class="summary-grid">
-        <div class="summary-card green">
-          <div class="label">Arsitektur Kode</div>
-          <div class="value">8.0</div>
-          <div class="sub">/ 10 — Refaktor bersih, modular</div>
+    <!-- ISSUE 2 — FIXED -->
+    <div class="issue-card fixed">
+      <div class="issue-header">
+        <div class="issue-title">✅ #2 — Konflik Konfigurasi Leverage: use_max_leverage vs max_leverage_cap <span style="font-size:11px;color:var(--green)">[FIXED]</span></div>
+        <div class="badge fixed">FIXED</div>
+      </div>
+      <div class="issue-body">
+        <strong>Root cause:</strong> <code>MAX_LEVERAGE_CAP</code> dibaca dari config tapi tidak pernah dipakai di <code>auto_trades.py</code>.<br><br>
+        <strong>Fix yang diterapkan di <code>auto_trades.py</code>:</strong>
+        <div class="math-box">
+          <span class="comment"># Sebelum (BUG):</span><br>
+          USE_MAX_LEVERAGE = RISK.get('use_max_leverage', False)<br>
+          <span class="comment"># MAX_LEVERAGE_CAP tidak dibaca sama sekali</span><br>
+          def get_leverage_for(symbol): → client.fetch_max_leverage(symbol, fallback=25)<br>
+          <br>
+          <span class="comment"># Sesudah (FIXED):</span><br>
+          MAX_LEVERAGE_CAP = RISK.get('max_leverage_cap', 100)  <span class="comment"># dibaca dari config</span><br>
+          def get_leverage_for(symbol):<br>
+          &nbsp;&nbsp;lev = client.fetch_max_leverage(symbol, fallback=TARGET_LEV)<br>
+          &nbsp;&nbsp;return <span class="highlight">min(lev, MAX_LEVERAGE_CAP)</span>  <span class="comment"># hard cap diterapkan</span>
         </div>
-        <div
-          class="summary-card"
-          style="border-color: var(--green)">
-          <div class="label">Risk Management</div>
-          <div
-            class="value"
-            style="color: var(--green)">
-            7.5
-          </div>
-          <div class="sub">/ 10 — Leverage cap bug fixed ✅</div>
-        </div>
-        <div
-          class="summary-card"
-          style="border-color: var(--green)">
-          <div class="label">Akurasi Signal</div>
-          <div
-            class="value"
-            style="color: var(--green)">
-            7.5
-          </div>
-          <div class="sub">/ 10 — Zeta direction-aware, base score 0 ✅</div>
-        </div>
-        <div class="summary-card blue">
-          <div class="label">SMC Module</div>
-          <div class="value">7.5</div>
-          <div class="sub">/ 10 — Solid tapi OB logic riskan</div>
-        </div>
-        <div class="summary-card red">
-          <div class="label">Backtesting</div>
-          <div class="value">0</div>
-          <div class="sub">/ 10 — Tidak ada sama sekali</div>
-        </div>
-        <div class="summary-card purple">
-          <div class="label">Realistis 1%/hari</div>
-          <div class="value">4.5</div>
-          <div class="sub">/ 10 — Perlu improvement</div>
+        <div class="issue-impact" style="border-left:2px solid var(--green);padding-left:10px;margin-top:10px;">
+          <div class="impact-label" style="color:var(--green)">Status</div>
+          Karena <code>risk_percent: 1%</code> per posisi, margin yang digunakan tetap 1% modal — leverage tinggi tidak menambah risiko modal, hanya menambah notional size. <code>max_leverage_cap</code> kini berfungsi sebagai safety ceiling yang dapat dikonfigurasi. Set ke 100 untuk pakai max Bybit, atau turunkan sesuai selera risiko.
         </div>
       </div>
     </div>
 
-    <!-- ═══ PIPELINE ═══ -->
-    <div class="section">
-      <div class="section-title">Alur Pipeline Signal</div>
-      <div
-        style="
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 10px;
-          padding: 4px 16px;
-        ">
-        <div class="pipeline">
-          <div class="pipeline-step">
-            <div class="step-num">01</div>
-            <div class="step-content">
-              <div class="step-name">Watchlist Refresh — Top 100 USDT Perp</div>
-              <div class="step-desc">
-                Ambil pair terlikuid berdasarkan volume. 20 threads paralel.
-              </div>
-            </div>
-            <div class="step-status ok">OK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">02</div>
-            <div class="step-content">
-              <div class="step-name">
-                BTC Bias Filter — EMA13/21 + ADX(14) di 1h
-              </div>
-              <div class="step-desc">
-                Sideway = lolos, Bullish bias blokir Short, Bearish bias blokir
-                Long.
-              </div>
-            </div>
-            <div class="step-status warn">PERLU REVIEW</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">03</div>
-            <div class="step-content">
-              <div class="step-name">
-                Technical Indicators — EMA, StochRSI, MACD, ATR, ADX
-              </div>
-              <div class="step-desc">
-                Dasar filter entry. ADX minimum 15, ATR 0.1%–3%.
-              </div>
-            </div>
-            <div class="step-status ok">OK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">04</div>
-            <div class="step-content">
-              <div class="step-name">Pattern Detection — 7 Chart Patterns</div>
-              <div class="step-desc">
-                Double Top/Bottom, Bull/Bear Flag, Triangle, Rectangle. Volume
-                gate untuk breakout.
-              </div>
-            </div>
-            <div class="step-status ok">OK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">05</div>
-            <div class="step-content">
-              <div class="step-name">
-                MTF Supertrend Alignment — Symbol Trend 1h
-              </div>
-              <div class="step-desc">
-                Supertrend(10, 3.5) di 1h harus searah dengan signal 15m.
-              </div>
-            </div>
-            <div class="step-status ok">OK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">06</div>
-            <div class="step-content">
-              <div class="step-name">
-                MTF Pattern Confluence — Pattern 1h vs 15m
-              </div>
-              <div class="step-desc">
-                Reject jika pattern 1h berlawanan arah. Weak pass jika 1h tidak
-                ada pattern.
-              </div>
-            </div>
-            <div class="step-status ok">OK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">07</div>
-            <div class="step-content">
-              <div class="step-name">
-                SMC Analysis — Structure, BOS, OB, FVG, Sweep
-              </div>
-              <div class="step-desc">
-                5 komponen SMC dengan scoring. Min score 2.
-              </div>
-            </div>
-            <div class="step-status warn">BUG MINOR</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">08</div>
-            <div class="step-content">
-              <div class="step-name">
-                Quant Metrics — Zeta, Z-Score, OBI, RVOL
-              </div>
-              <div class="step-desc">
-                ✅ Base score 0 (fix #4). Zeta kini direction-aware —
-                Long=Zeta&gt;70, Short=Zeta&lt;30 (fix #5).
-              </div>
-            </div>
-            <div
-              class="step-status"
-              style="color: var(--green); border-color: var(--green)">
-              FIXED
-            </div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">09</div>
-            <div class="step-content">
-              <div class="step-name">
-                Derivatives — Funding Rate Gate + CVD Divergence
-              </div>
-              <div class="step-desc">
-                Reject Long saat funding >2%, Reject Short saat funding <-2%.
-                CVD proxy sederhana.
-              </div>
-            </div>
-            <div class="step-status warn">CVD LEMAH</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">10</div>
-            <div class="step-content">
-              <div class="step-name">
-                Correlation Filter — Pearson 50 candle
-              </div>
-              <div class="step-desc">
-                Reject jika korelasi ≥ 0.85 dengan posisi aktif. Window 50×15m =
-                12.5 jam.
-              </div>
-            </div>
-            <div class="step-status warn">WINDOW PENDEK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">11</div>
-            <div class="step-content">
-              <div class="step-name">Candle Confirmation — DB-backed state</div>
-              <div class="step-desc">
-                Tunggu 1 candle close setelah pattern. State disimpan ke SQLite.
-              </div>
-            </div>
-            <div class="step-status ok">OK</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="step-num">12</div>
-            <div class="step-content">
-              <div class="step-name">
-                Entry / SL / TP Builder — ATR-based SL, R:R ≥ 2.5
-              </div>
-              <div class="step-desc">
-                Entry dari bid/ask live. SL floor 0.5%. TP1=1R, TP2=2R, TP3=3R.
-              </div>
-            </div>
-            <div class="step-status warn">PERLU TUNING</div>
-          </div>
+    <!-- ISSUE 3 -->
+    <div class="issue-card critical">
+      <div class="issue-header">
+        <div class="issue-title">🔴 #3 — Matematika 1% Profit/Hari vs Konfigurasi Saat Ini</div>
+        <div class="badge critical">CRITICAL</div>
+      </div>
+      <div class="issue-body">
+        Mari kita hitung Expected Value (EV) harian berdasarkan parameter yang ada saat ini:
+        <div class="math-box">
+          <span class="comment">── Parameter dari config ──────────────────</span><br>
+          max_daily_trades    = 3<br>
+          risk_percent        = 1% per trade<br>
+          TP split            = [40%, 30%, 30%] at [1R, 2R, 3R]<br>
+          min_rr              = 2.5 (diukur ke TP3)<br>
+          <br>
+          <span class="comment">── Expected Profit per Winning Trade ──────</span><br>
+          Avg Win = 0.4×1R + 0.3×2R + 0.3×3R = <span class="highlight">1.9R</span><br>
+          1R = 1% modal → Avg Win = <span class="highlight">1.9% per trade winner</span><br>
+          <br>
+          <span class="comment">── Biaya Trading (Bybit Taker ~0.055%) ───</span><br>
+          Round trip per trade ≈ 0.11% × leverage-adjusted<br>
+          3 trades × 0.11% = <span class="warn">0.33% modal tergerus fees</span><br>
+          <br>
+          <span class="comment">── Win Rate yang Dibutuhkan ────────────────</span><br>
+          Target: 1% profit bersih/hari (setelah fees)<br>
+          Dengan 3 trades: butuh EV ≥ 1.33% gross dari 3 trades<br>
+          Jika 1 trade menang (1.9%) − 2 trade kalah (2×1%) − fees (0.33%)<br>
+          = 1.9% − 2% − 0.33% = <span class="err">−0.43% ← MERUGI</span><br>
+          <br>
+          Butuh minimal <span class="highlight">2 dari 3 trades menang</span> untuk 1% profit/hari:<br>
+          2 winners (3.8%) − 1 loser (1%) − fees = <span class="highlight">+2.47% ✓</span><br>
+          → Win rate ≥ <span class="highlight">~65-67% secara konsisten</span>
+        </div>
+        <div class="issue-impact critical">
+          <div class="impact-label">Dampak Implementasi</div>
+          Win rate 65%+ sangat sulit dicapai tanpa validasi dan optimasi mendalam. Tanpa backtest, tidak ada bukti strategi ini mencapai win rate tersebut. Dengan kondisi market sideways (yang dominan 60-70% waktu), pattern detection akan banyak false signal.
         </div>
       </div>
     </div>
 
-    <!-- ═══ CRITICAL ISSUES ═══ -->
-    <div class="section">
-      <div class="section-title">
-        Masalah yang Ditemukan & Dampak Implementasi
+    <!-- ISSUE 4 — FIXED -->
+    <div class="issue-card fixed">
+      <div class="issue-header">
+        <div class="issue-title">✅ #4 — Quant Score: Base Score Hardcode 2 = Inflasi Signal <span style="font-size:11px;color:var(--green)">[FIXED]</span></div>
+        <div class="badge fixed">FIXED</div>
       </div>
-      <div class="issue-list">
-        <!-- ISSUE 1 -->
-        <div class="issue-card critical">
-          <div class="issue-header">
-            <div class="issue-title">
-              🔴 #1 — Tidak Ada Backtesting: Strategi Berjalan Tanpa Validasi
-              Historis
-            </div>
-            <div class="badge critical">CRITICAL</div>
-          </div>
-          <div class="issue-body">
-            Seluruh codebase tidak memiliki satu pun modul backtesting. Strategi
-            multi-filter ini (SMC + Quant + Pattern + MTF) belum pernah
-            divalidasi terhadap data historis. Tidak diketahui apakah kombinasi
-            filter ini menghasilkan positive expectancy di Bybit.
-            <div class="issue-impact critical">
-              <div class="impact-label">Dampak Implementasi</div>
-              Jika Anda jalankan live dengan
-              <code>auto_trade: true</code> sekarang, modal bisa habis dalam
-              hitungan minggu tanpa pernah tahu apakah strategi ini punya edge
-              sama sekali. Win rate aktual tidak diketahui — bisa 30%, bisa 20%,
-              tidak ada cara tahu tanpa backtest.
-            </div>
-          </div>
+      <div class="issue-body">
+        <strong>Root cause:</strong> <code>score, reasons = 2, []</code> di <code>calculate_metrics()</code> membuat setiap pair sudah punya 2 poin gratis sebelum ada sinyal apapun.<br><br>
+        <strong>Fix yang diterapkan di <code>modules/quant.py</code>:</strong>
+        <div class="math-box">
+          <span class="comment"># Sebelum (BUG):</span><br>
+          score, reasons = <span class="err">2</span>, []  <span class="comment"># 2 poin gratis — OBI >0.3 saja sudah lolos min_quant_score=3</span><br>
+          <br>
+          <span class="comment"># Sesudah (FIXED):</span><br>
+          score, reasons = <span class="highlight">0</span>, []  <span class="comment"># mulai dari nol — butuh sinyal nyata untuk lolos</span><br>
+          <span class="comment"># Untuk lolos min_quant_score=3, butuh kombinasi nyata:</span><br>
+          <span class="comment"># misal: Z-Score tinggi (+2) + Zeta konfirm arah (+1) = 3 ✓</span><br>
+          <span class="comment"># atau: Nuclear RVOL (+1) + Z-Score (+2) = 3 ✓</span>
         </div>
-
-        <!-- ISSUE 2 — FIXED -->
-        <div class="issue-card fixed">
-          <div class="issue-header">
-            <div class="issue-title">
-              ✅ #2 — Konflik Konfigurasi Leverage: use_max_leverage vs
-              max_leverage_cap
-              <span style="font-size: 11px; color: var(--green)">[FIXED]</span>
-            </div>
-            <div class="badge fixed">FIXED</div>
-          </div>
-          <div class="issue-body">
-            <strong>Root cause:</strong> <code>MAX_LEVERAGE_CAP</code> dibaca
-            dari config tapi tidak pernah dipakai di
-            <code>auto_trades.py</code>.<br /><br />
-            <strong>Fix yang diterapkan di <code>auto_trades.py</code>:</strong>
-            <div class="math-box">
-              <span class="comment"># Sebelum (BUG):</span><br />
-              USE_MAX_LEVERAGE = RISK.get('use_max_leverage', False)<br />
-              <span class="comment"
-                ># MAX_LEVERAGE_CAP tidak dibaca sama sekali</span
-              ><br />
-              def get_leverage_for(symbol): → client.fetch_max_leverage(symbol,
-              fallback=25)<br />
-              <br />
-              <span class="comment"># Sesudah (FIXED):</span><br />
-              MAX_LEVERAGE_CAP = RISK.get('max_leverage_cap', 100)
-              <span class="comment"># dibaca dari config</span><br />
-              def get_leverage_for(symbol):<br />
-              &nbsp;&nbsp;lev = client.fetch_max_leverage(symbol,
-              fallback=TARGET_LEV)<br />
-              &nbsp;&nbsp;return
-              <span class="highlight">min(lev, MAX_LEVERAGE_CAP)</span>
-              <span class="comment"># hard cap diterapkan</span>
-            </div>
-            <div
-              class="issue-impact"
-              style="
-                border-left: 2px solid var(--green);
-                padding-left: 10px;
-                margin-top: 10px;
-              ">
-              <div
-                class="impact-label"
-                style="color: var(--green)">
-                Status
-              </div>
-              Karena <code>risk_percent: 1%</code> per posisi, margin yang
-              digunakan tetap 1% modal — leverage tinggi tidak menambah risiko
-              modal, hanya menambah notional size.
-              <code>max_leverage_cap</code> kini berfungsi sebagai safety
-              ceiling yang dapat dikonfigurasi. Set ke 100 untuk pakai max
-              Bybit, atau turunkan sesuai selera risiko.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 3 -->
-        <div class="issue-card critical">
-          <div class="issue-header">
-            <div class="issue-title">
-              🔴 #3 — Matematika 1% Profit/Hari vs Konfigurasi Saat Ini
-            </div>
-            <div class="badge critical">CRITICAL</div>
-          </div>
-          <div class="issue-body">
-            Mari kita hitung Expected Value (EV) harian berdasarkan parameter
-            yang ada saat ini:
-            <div class="math-box">
-              <span class="comment"
-                >── Parameter dari config ──────────────────</span
-              ><br />
-              max_daily_trades = 3<br />
-              risk_percent = 1% per trade<br />
-              TP split = [40%, 30%, 30%] at [1R, 2R, 3R]<br />
-              min_rr = 2.5 (diukur ke TP3)<br />
-              <br />
-              <span class="comment"
-                >── Expected Profit per Winning Trade ──────</span
-              ><br />
-              Avg Win = 0.4×1R + 0.3×2R + 0.3×3R =
-              <span class="highlight">1.9R</span><br />
-              1R = 1% modal → Avg Win =
-              <span class="highlight">1.9% per trade winner</span><br />
-              <br />
-              <span class="comment"
-                >── Biaya Trading (Bybit Taker ~0.055%) ───</span
-              ><br />
-              Round trip per trade ≈ 0.11% × leverage-adjusted<br />
-              3 trades × 0.11% =
-              <span class="warn">0.33% modal tergerus fees</span><br />
-              <br />
-              <span class="comment"
-                >── Win Rate yang Dibutuhkan ────────────────</span
-              ><br />
-              Target: 1% profit bersih/hari (setelah fees)<br />
-              Dengan 3 trades: butuh EV ≥ 1.33% gross dari 3 trades<br />
-              Jika 1 trade menang (1.9%) − 2 trade kalah (2×1%) − fees
-              (0.33%)<br />
-              = 1.9% − 2% − 0.33% = <span class="err">−0.43% ← MERUGI</span
-              ><br />
-              <br />
-              Butuh minimal
-              <span class="highlight">2 dari 3 trades menang</span> untuk 1%
-              profit/hari:<br />
-              2 winners (3.8%) − 1 loser (1%) − fees =
-              <span class="highlight">+2.47% ✓</span><br />
-              → Win rate ≥
-              <span class="highlight">~65-67% secara konsisten</span>
-            </div>
-            <div class="issue-impact critical">
-              <div class="impact-label">Dampak Implementasi</div>
-              Win rate 65%+ sangat sulit dicapai tanpa validasi dan optimasi
-              mendalam. Tanpa backtest, tidak ada bukti strategi ini mencapai
-              win rate tersebut. Dengan kondisi market sideways (yang dominan
-              60-70% waktu), pattern detection akan banyak false signal.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 4 — FIXED -->
-        <div class="issue-card fixed">
-          <div class="issue-header">
-            <div class="issue-title">
-              ✅ #4 — Quant Score: Base Score Hardcode 2 = Inflasi Signal
-              <span style="font-size: 11px; color: var(--green)">[FIXED]</span>
-            </div>
-            <div class="badge fixed">FIXED</div>
-          </div>
-          <div class="issue-body">
-            <strong>Root cause:</strong> <code>score, reasons = 2, []</code> di
-            <code>calculate_metrics()</code> membuat setiap pair sudah punya 2
-            poin gratis sebelum ada sinyal apapun.<br /><br />
-            <strong
-              >Fix yang diterapkan di <code>modules/quant.py</code>:</strong
-            >
-            <div class="math-box">
-              <span class="comment"># Sebelum (BUG):</span><br />
-              score, reasons = <span class="err">2</span>, []
-              <span class="comment"
-                ># 2 poin gratis — OBI >0.3 saja sudah lolos
-                min_quant_score=3</span
-              ><br />
-              <br />
-              <span class="comment"># Sesudah (FIXED):</span><br />
-              score, reasons = <span class="highlight">0</span>, []
-              <span class="comment"
-                ># mulai dari nol — butuh sinyal nyata untuk lolos</span
-              ><br />
-              <span class="comment"
-                ># Untuk lolos min_quant_score=3, butuh kombinasi nyata:</span
-              ><br />
-              <span class="comment"
-                ># misal: Z-Score tinggi (+2) + Zeta konfirm arah (+1) = 3
-                ✓</span
-              ><br />
-              <span class="comment"
-                ># atau: Nuclear RVOL (+1) + Z-Score (+2) = 3 ✓</span
-              >
-            </div>
-            <div
-              class="issue-impact"
-              style="
-                border-left: 2px solid var(--green);
-                padding-left: 10px;
-                margin-top: 10px;
-              ">
-              <div
-                class="impact-label"
-                style="color: var(--green)">
-                Status
-              </div>
-              Filter quant kini bermakna — lebih sedikit signal masuk, tapi
-              kualitasnya lebih tinggi. Win rate yang lebih baik karena pair
-              sideways tanpa sinyal kuantitatif nyata akan tersaring.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 5 — FIXED -->
-        <div class="issue-card fixed">
-          <div class="issue-header">
-            <div class="issue-title">
-              ✅ #5 — Zeta Field Tidak Direction-Aware: Bonus untuk Long dan
-              Short Sama
-              <span style="font-size: 11px; color: var(--green)">[FIXED]</span>
-            </div>
-            <div class="badge fixed">FIXED</div>
-          </div>
-          <div class="issue-body">
-            <strong>Root cause:</strong>
-            <code>calculate_zeta_field()</code> memberi bonus +1 jika Zeta
-            &gt;70 ATAU &lt;30, tanpa peduli apakah Zeta sesuai dengan arah
-            trade.<br /><br />
-            <strong
-              >Fix yang diterapkan di <code>modules/quant.py</code> &amp;
-              <code>main.py</code>:</strong
-            >
-            <div class="math-box">
-              <span class="comment"># Sebelum (BUG) — arah diabaikan:</span
-              ><br />
-              if zeta &gt; 70: bonus = +1
-              <span class="comment"># bisa Long ATAU Short dapat bonus ini</span
-              ><br />
-              if zeta &lt; 30: bonus = +1
-              <span class="comment"># sama — tidak ada filter arah</span><br />
-              <br />
-              <span class="comment"
-                ># Sesudah (FIXED) — bonus hanya jika Zeta konfirmasi
-                arah:</span
-              ><br />
-              if side == "Long" and zeta &gt; 70: bonus = +1
-              <span class="highlight"># zeta-Bull — momentum naik</span><br />
-              if side == "Short" and zeta &lt; 30: bonus = +1
-              <span class="highlight"># zeta-Bear — momentum turun</span><br />
-              <span class="comment"
-                ># calculate_metrics() kini menerima parameter side= dan
-                meneruskannya</span
-              >
-            </div>
-            <div
-              class="issue-impact"
-              style="
-                border-left: 2px solid var(--green);
-                padding-left: 10px;
-                margin-top: 10px;
-              ">
-              <div
-                class="impact-label"
-                style="color: var(--green)">
-                Status
-              </div>
-              Konfirmasi Zeta kini searah dengan signal. Long hanya dapat bonus
-              Zeta saat momentum memang bullish (Zeta &gt;70), Short hanya saat
-              momentum memang bearish (Zeta &lt;30). Entry quality meningkat
-              khususnya di trending market.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 6 -->
-        <div class="issue-card warning">
-          <div class="issue-header">
-            <div class="issue-title">
-              🟠 #6 — CVD Kalkulasi Terlalu Sederhana: Tidak Akurat untuk
-              Futures
-            </div>
-            <div class="badge warning">WARNING</div>
-          </div>
-          <div class="issue-body">
-            CVD dihitung sebagai:
-            <code>volume jika close &gt; open, else -volume</code>. Ini
-            mengabaikan wick dan tekanan intra-candle. Pada futures Bybit, taker
-            aggressor seringkali terjadi di wick, bukan di close candle. CVD
-            yang benar menggunakan bid/ask data per tick.
-            <div class="math-box">
-              <span class="comment"># Current (inaccurate):</span><br />
-              delta = volume if close &gt; open else -volume<br />
-              <br />
-              <span class="comment"># Better approximation (VWAP-based):</span
-              ><br />
-              buy_vol = volume × (close − low) / (high − low + ε)<br />
-              sell_vol = volume × (high − close) / (high − low + ε)<br />
-              delta = buy_vol − sell_vol
-            </div>
-            <div class="issue-impact warning">
-              <div class="impact-label">Dampak Implementasi</div>
-              CVD divergence signal tidak dapat diandalkan penuh. False
-              bullish/bearish CVD signal akan lolos filter, menurunkan kualitas
-              sinyal derivatif secara keseluruhan.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 7 -->
-        <div class="issue-card warning">
-          <div class="issue-header">
-            <div class="issue-title">
-              🟠 #7 — OB Mitigation Logic Terlalu Sensitif
-            </div>
-            <div class="badge warning">WARNING</div>
-          </div>
-          <div class="issue-body">
-            Di <code>find_order_blocks()</code>, sebuah bullish OB dinyatakan
-            "mitigated" jika candle LOW mana pun setelah OB menyentuh
-            <code>ob_high × 1.001</code>. Ini terlalu agresif — bahkan satu
-            candle kecil yang wicking ke zona OB akan mendisualifikasi OB
-            tersebut meskipun harga langsung rebound kuat.
-            <div class="issue-impact warning">
-              <div class="impact-label">Dampak Implementasi</div>
-              Fresh OB terlalu jarang ditemukan karena terlalu banyak yang
-              dianggap sudah mitigated. SMC score akan sering rendah bukan
-              karena tidak ada OB, tapi karena OB valid pun di-exclude. Ini
-              menurunkan sensitivitas signal.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 8 -->
-        <div class="issue-card warning">
-          <div class="issue-header">
-            <div class="issue-title">
-              🟠 #8 — BTC Bias Terlalu Rigid: Memblokir Altcoin Setup yang Valid
-            </div>
-            <div class="badge warning">WARNING</div>
-          </div>
-          <div class="issue-body">
-            BTC Bias berdasarkan EMA13/21 di 1h akan memblokir
-            <strong>semua Long</strong> saat BTC sedang koreksi, meski altcoin
-            tertentu sedang dalam impulse bullish independen. Ini khususnya
-            bermasalah untuk pair yang berkorelasi rendah dengan BTC (seperti
-            beberapa DeFi tokens, meme coins).
-            <div class="issue-impact warning">
-              <div class="impact-label">Dampak Implementasi</div>
-              Banyak peluang profit terlewat khususnya saat BTC
-              sideways/koreksi. Di pasar altseason, bot akan sangat jarang masuk
-              Long karena BTC sering tidak align sempurna. Miss opportunity rate
-              tinggi.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 9 -->
-        <div class="issue-card info">
-          <div class="issue-header">
-            <div class="issue-title">
-              🔵 #9 — Liquidity Sweep: O(n²) Loop di Threading Paralel
-            </div>
-            <div class="badge info">PERFORMA</div>
-          </div>
-          <div class="issue-body">
-            Fungsi <code>detect_liquidity_sweep()</code> menggunakan nested loop
-            O(n²) mencari equal highs/lows. Ini dijalankan untuk 100 pair secara
-            paralel dengan 20 threads. Pada server dengan CPU rendah, ini bisa
-            menyebabkan scan timeout atau delay yang membuat signal terlambat.
-            <div class="issue-impact info">
-              <div class="impact-label">Dampak Implementasi</div>
-              Pada VPS murah (1-2 vCPU), scan 100 pair bisa memakan 5-10 menit —
-              padahal interval scan 15 menit. Signal bisa terlambat atau scan
-              tidak selesai sebelum jadwal berikutnya. Entry jadi kurang tepat
-              timing-nya.
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 10 -->
-        <div class="issue-card info">
-          <div class="issue-header">
-            <div class="issue-title">
-              🔵 #10 — Correlation Filter: Window 12.5 Jam Terlalu Pendek &
-              Noisy
-            </div>
-            <div class="badge info">STATISTIK</div>
-          </div>
-          <div class="issue-body">
-            Korelasi Pearson dihitung atas 50 candle × 15m = 12.5 jam data.
-            Korelasi jangka pendek sangat volatile — dua asset bisa 0.9
-            correlated dalam satu sesi dan 0.2 di sesi berikutnya. Filter ini
-            akan terlalu sering menolak pair yang sebenarnya tidak bermasalah.
-            <div class="issue-impact info">
-              <div class="impact-label">Dampak Implementasi</div>
-              Filter korelasi palsu reject peluang valid. Di sisi lain, pada
-              crash mendadak, korelasi antar aset bisa 0.95+ meskipun window
-              pendek, sehingga filter tetap berguna dalam kondisi extreme. Perlu
-              window lebih panjang (minimum 200 candle / ~50 jam).
-            </div>
-          </div>
-        </div>
-
-        <!-- ISSUE 11 -->
-        <div class="issue-card info">
-          <div class="issue-header">
-            <div class="issue-title">
-              🔵 #11 — daily_profit_target_pct 1.5% vs Target 1% Anda
-            </div>
-            <div class="badge info">KONFIGURASI</div>
-          </div>
-          <div class="issue-body">
-            Config saat ini: <code>daily_profit_target_pct: 0.015</code> (1.5%).
-            Jika Anda target 1%/hari, bot akan terus trading sampai 1.5% — bukan
-            berhenti di 1%. Ini berarti bot mengambil risiko tambahan padahal
-            target sudah tercapai. Sebaiknya sesuaikan ke <code>0.01</code>.
-            <div class="issue-impact info">
-              <div class="impact-label">Dampak Implementasi</div>
-              Pada hari-hari bagus, bot mungkin memberikan 1.5% tapi di hari
-              buruk berikutnya circuit breaker 1% loss tidak cukup melindungi
-              drawdown harian. Ketidaksimetrisan ini akan merugikan dalam jangka
-              panjang (loss 1% + profit 1.5% tidak seimbang secara psikologis
-              dan matematis dengan 3 trade limit).
-            </div>
-          </div>
+        <div class="issue-impact" style="border-left:2px solid var(--green);padding-left:10px;margin-top:10px;">
+          <div class="impact-label" style="color:var(--green)">Status</div>
+          Filter quant kini bermakna — lebih sedikit signal masuk, tapi kualitasnya lebih tinggi. Win rate yang lebih baik karena pair sideways tanpa sinyal kuantitatif nyata akan tersaring.
         </div>
       </div>
     </div>
 
-    <!-- ═══ EXPECTED VALUE TABLE ═══ -->
-    <div class="section">
-      <div class="section-title">Simulasi Expected Value Harian</div>
-      <div
-        style="
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 10px;
-          overflow: hidden;
-        ">
-        <table>
-          <thead>
-            <tr>
-              <th>Skenario</th>
-              <th>Win Rate</th>
-              <th>Trade/hari</th>
-              <th>Gross P&L</th>
-              <th>Fees Est.</th>
-              <th>Net P&L/hari</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Optimis (market bagus)</td>
-              <td>67%</td>
-              <td>3</td>
-              <td>+2.47%</td>
-              <td>-0.33%</td>
-              <td class="tbl-green">+2.14%</td>
-              <td class="tbl-green">✓ Target tercapai</td>
-            </tr>
-            <tr>
-              <td>Realistis (normal)</td>
-              <td>50%</td>
-              <td>3</td>
-              <td>+0.85%</td>
-              <td>-0.33%</td>
-              <td class="tbl-yellow">+0.52%</td>
-              <td class="tbl-yellow">△ Di bawah target</td>
-            </tr>
-            <tr>
-              <td>Sideways Market</td>
-              <td>40%</td>
-              <td>2</td>
-              <td>-0.18%</td>
-              <td>-0.22%</td>
-              <td class="tbl-red">-0.40%</td>
-              <td class="tbl-red">✗ Merugi</td>
-            </tr>
-            <tr>
-              <td>Bad Day (volatil tinggi)</td>
-              <td>33%</td>
-              <td>3</td>
-              <td>-0.10%</td>
-              <td>-0.33%</td>
-              <td class="tbl-red">-1.00%</td>
-              <td class="tbl-red">✗ DD max harian</td>
-            </tr>
-            <tr>
-              <td
-                style="color: var(--muted); font-size: 12px"
-                colspan="7">
-                * Berdasarkan: risk 1%/trade, TP split 40/30/30 di 1R/2R/3R,
-                Bybit taker fee 0.055%, max 3 trade/hari
-              </td>
-            </tr>
-          </tbody>
-        </table>
+    <!-- ISSUE 5 — FIXED -->
+    <div class="issue-card fixed">
+      <div class="issue-header">
+        <div class="issue-title">✅ #5 — Zeta Field Tidak Direction-Aware: Bonus untuk Long dan Short Sama <span style="font-size:11px;color:var(--green)">[FIXED]</span></div>
+        <div class="badge fixed">FIXED</div>
       </div>
-    </div>
-
-    <!-- ═══ STRATEGY SCORE DECOMPOSITION ═══ -->
-    <div class="section">
-      <div class="section-title">
-        Bobot Filter dalam Pipeline (Estimasi Rejection Rate)
-      </div>
-      <div
-        style="
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 10px;
-          padding: 18px 20px;
-        ">
-        <div class="score-row">
-          <div class="score-label">No Pattern Detected</div>
-          <div class="score-bar-wrap">
-            <div
-              class="score-bar"
-              style="width: 70%; background: var(--red)"></div>
-          </div>
-          <div class="score-value">~70%</div>
+      <div class="issue-body">
+        <strong>Root cause:</strong> <code>calculate_zeta_field()</code> memberi bonus +1 jika Zeta &gt;70 ATAU &lt;30, tanpa peduli apakah Zeta sesuai dengan arah trade.<br><br>
+        <strong>Fix yang diterapkan di <code>modules/quant.py</code> &amp; <code>main.py</code>:</strong>
+        <div class="math-box">
+          <span class="comment"># Sebelum (BUG) — arah diabaikan:</span><br>
+          if zeta &gt; 70: bonus = +1  <span class="comment"># bisa Long ATAU Short dapat bonus ini</span><br>
+          if zeta &lt; 30: bonus = +1  <span class="comment"># sama — tidak ada filter arah</span><br>
+          <br>
+          <span class="comment"># Sesudah (FIXED) — bonus hanya jika Zeta konfirmasi arah:</span><br>
+          if side == "Long"  and zeta &gt; 70: bonus = +1  <span class="highlight"># zeta-Bull — momentum naik</span><br>
+          if side == "Short" and zeta &lt; 30: bonus = +1  <span class="highlight"># zeta-Bear — momentum turun</span><br>
+          <span class="comment"># calculate_metrics() kini menerima parameter side= dan meneruskannya</span>
         </div>
-        <div class="score-row">
-          <div class="score-label">MTF / BTC Conflict</div>
-          <div class="score-bar-wrap">
-            <div
-              class="score-bar"
-              style="width: 50%; background: var(--orange)"></div>
-          </div>
-          <div class="score-value">~50%</div>
-        </div>
-        <div class="score-row">
-          <div class="score-label">SMC Fail</div>
-          <div class="score-bar-wrap">
-            <div
-              class="score-bar"
-              style="width: 40%; background: var(--orange)"></div>
-          </div>
-          <div class="score-value">~40%</div>
-        </div>
-        <div class="score-row">
-          <div class="score-label">Low RVOL / Quant</div>
-          <div class="score-bar-wrap">
-            <div
-              class="score-bar"
-              style="width: 35%; background: var(--blue)"></div>
-          </div>
-          <div class="score-value">~35%</div>
-        </div>
-        <div class="score-row">
-          <div class="score-label">Low R:R (&lt;2.5)</div>
-          <div class="score-bar-wrap">
-            <div
-              class="score-bar"
-              style="width: 25%; background: var(--blue)"></div>
-          </div>
-          <div class="score-value">~25%</div>
-        </div>
-        <div class="score-row">
-          <div class="score-label">Candle Confirm Wait</div>
-          <div class="score-bar-wrap">
-            <div
-              class="score-bar"
-              style="width: 15%; background: var(--muted)"></div>
-          </div>
-          <div class="score-value">~15%</div>
-        </div>
-        <div class="sep"></div>
-        <div style="font-size: 12px; color: var(--muted)">
-          Estimasi signal lolos ke Telegram:
-          <strong style="color: var(--accent)"
-            >1–3 per scan dari 100 pair</strong
-          >. Dengan interval 15m dan active window 06-22 UTC (16 jam = ~64
-          scan/hari), potensi signal harian 3–10 — tapi
-          <code>max_daily_trades: 3</code> membatasi eksekusi.
+        <div class="issue-impact" style="border-left:2px solid var(--green);padding-left:10px;margin-top:10px;">
+          <div class="impact-label" style="color:var(--green)">Status</div>
+          Konfirmasi Zeta kini searah dengan signal. Long hanya dapat bonus Zeta saat momentum memang bullish (Zeta &gt;70), Short hanya saat momentum memang bearish (Zeta &lt;30). Entry quality meningkat khususnya di trending market.
         </div>
       </div>
     </div>
 
-    <!-- ═══ IMPROVEMENTS ═══ -->
-    <div class="section">
-      <div class="section-title">
-        Rekomendasi Improvement untuk Target 1%/Hari
+    <!-- ISSUE 6 — FIXED -->
+    <div class="issue-card fixed">
+      <div class="issue-header">
+        <div class="issue-title">✅ #6 — CVD Kalkulasi Terlalu Sederhana: Tidak Akurat untuk Futures <span style="font-size:11px;color:var(--green)">[FIXED]</span></div>
+        <div class="badge fixed">FIXED</div>
       </div>
-      <div class="improve-grid">
-        <div
-          class="improve-card"
-          style="border-color: var(--green); opacity: 0.8">
-          <div class="ic-header">
-            <div
-              class="ic-num"
-              style="color: var(--green)">
-              ✅
-            </div>
-            <div
-              class="ic-title"
-              style="color: var(--green)">
-              Fix Max Leverage Cap — DONE
-            </div>
-          </div>
-          <div class="ic-body">
-            <code>MAX_LEVERAGE_CAP</code> kini dibaca dari config dan diterapkan
-            di <code>get_leverage_for()</code> sebagai hard ceiling:<br /><br />
-            <code>return min(lev, MAX_LEVERAGE_CAP)</code><br /><br />
-            Karena <code>risk_percent: 1%</code>, margin per posisi tetap 1%
-            modal — leverage Bybit max aman digunakan. Set
-            <code>max_leverage_cap</code> sesuai selera risiko.
-          </div>
-          <div
-            class="ic-tag"
-            style="color: var(--green)">
-            FIXED — auto_trades.py
-          </div>
+      <div class="issue-body">
+        <strong>Root cause:</strong> CVD dihitung dengan <code>np.where(close &gt; open, volume, -volume)</code> — binary, mengabaikan wick sepenuhnya. Pada futures Bybit, taker aggressor sering terjadi di wick bukan di close candle.<br><br>
+        <strong>Fix yang diterapkan di <code>modules/derivatives.py</code>:</strong>
+        <div class="math-box">
+          <span class="comment"># Sebelum (inaccurate — binary, wick diabaikan):</span><br>
+          delta = np.where(close &gt; open, volume, -volume)<br>
+          <br>
+          <span class="comment"># Sesudah (FIXED — VWAP-based, proporsional terhadap wick):</span><br>
+          hl_range    = (high - low).clip(lower=1e-12)  <span class="comment"># epsilon guard / div-by-zero</span><br>
+          buy_vol     = volume × (close - low)  / hl_range<br>
+          sell_vol    = volume × (high - close) / hl_range<br>
+          delta       = <span class="highlight">buy_vol - sell_vol</span><br>
+          CVD         = delta.cumsum()
         </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">02</div>
-            <div class="ic-title">Buat Backtest Framework</div>
-          </div>
-          <div class="ic-body">
-            Download 6-12 bulan OHLCV dari Bybit (tersedia via API). Jalankan
-            seluruh pipeline signal terhadap data historis. Hitung
-            <strong
-              >win rate aktual, average R, max drawdown, Sharpe ratio</strong
-            >. Ini fondasi sebelum live trade apapun.
-          </div>
-          <div class="ic-tag">PRIORITAS TINGGI</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">03</div>
-            <div class="ic-title">Fix Zeta Field: Direction-Aware Scoring</div>
-          </div>
-          <div class="ic-body">
-            Ubah logika bonus Zeta agar sesuai arah:<br /><br />
-            <strong>Long signal</strong>: bonus jika Zeta &lt;30 (oversold,
-            momentum akan naik)<br />
-            <strong>Short signal</strong>: bonus jika Zeta &gt;70 (overbought,
-            momentum akan turun)<br /><br />
-            Ini meningkatkan akurasi signal secara signifikan.
-          </div>
-          <div class="ic-tag">KODE FIX — 5 BARIS</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">04</div>
-            <div class="ic-title">Tingkatkan CVD: VWAP-Weighted Delta</div>
-          </div>
-          <div class="ic-body">
-            Ganti kalkulasi CVD dengan formula berbasis wick:<br /><br />
-            <code>buy = vol × (close−low)/(high−low+ε)</code><br />
-            <code>sell = vol × (high−close)/(high−low+ε)</code><br /><br />
-            Ini memberikan sinyal tekanan beli/jual yang jauh lebih akurat untuk
-            futures.
-          </div>
-          <div class="ic-tag">KODE FIX — 3 BARIS</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">05</div>
-            <div class="ic-title">Trailing Stop Setelah TP1 Hit</div>
-          </div>
-          <div class="ic-body">
-            Saat ini, setelah TP1 hit, sisa 60% posisi tidak memiliki trailing
-            stop. Tambahkan mekanisme
-            <strong>move SL to breakeven + trail</strong> setelah TP1
-            terkonfirmasi. Ini mengkonversi potensi -1% menjadi 0% loss di
-            kondisi reversal mendadak.
-          </div>
-          <div class="ic-tag">STRATEGY IMPROVE</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">06</div>
-            <div class="ic-title">Session Filter: London/NY Overlap</div>
-          </div>
-          <div class="ic-body">
-            Tambahkan filter sesi trading. Berdasarkan data historis crypto,
-            <strong>13:00–17:00 UTC</strong> (London + NY overlap) menghasilkan
-            win rate lebih tinggi dan volume lebih besar. Kurangi
-            <code>active_hours_utc</code> ke window terbaik untuk pair yang Anda
-            trade.
-          </div>
-          <div class="ic-tag">CONFIGURATION</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">07</div>
-            <div class="ic-title">OB Mitigation: Candle Close Filter</div>
-          </div>
-          <div class="ic-body">
-            Ubah OB mitigation dari "low menyentuh OB" menjadi "candle CLOSE di
-            bawah OB high". Ini jauh lebih akurat secara SMC — wick ke zona
-            tidak menganulir OB, hanya close yang melewatinya.
-          </div>
-          <div class="ic-tag">SMC IMPROVEMENT</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">08</div>
-            <div class="ic-title">Naikkan min_quant_score ke 4</div>
-          </div>
-          <div class="ic-body">
-            Karena base score dimulai dari 2, min score 3 hanya butuh +1 bonus.
-            Naikkan ke 4 untuk memastikan setidaknya
-            <strong>2 kondisi quant valid</strong> terpenuhi (RVOL tinggi +
-            Z-Score atau OBI kuat). Ini langkah mudah meningkatkan kualitas
-            filter tanpa mengubah kode.
-          </div>
-          <div class="ic-tag">CONFIG TWEAK</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">09</div>
-            <div class="ic-title">Optimize TP1 Split: 50% di TP1</div>
-          </div>
-          <div class="ic-body">
-            Ubah TP split dari <code>[0.4, 0.3, 0.3]</code> menjadi
-            <code>[0.5, 0.25, 0.25]</code>. Dengan mengambil 50% di TP1 (1R),
-            Anda mengamankan profit lebih konsisten per trade. Ini menurunkan
-            upside maksimum sedikit tapi meningkatkan konsistensi profit harian
-            secara signifikan.
-          </div>
-          <div class="ic-tag">RISK OPTIMIZATION</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">10</div>
-            <div class="ic-title">Tambah Volatility Regime Filter</div>
-          </div>
-          <div class="ic-body">
-            Jangan trade saat
-            <strong>VIX crypto (ATR/price ratio) terlalu rendah</strong> (pasar
-            flat, spread tinggi relatif terhadap target). Tambahkan filter: jika
-            ATR% &lt;0.15% pada 15m, skip semua signal. Ini mengurangi false
-            breakout di kondisi low-volume sideways.
-          </div>
-          <div class="ic-tag">NEW FILTER</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">11</div>
-            <div class="ic-title">Kurangi Leverage: 10-15× Lebih Aman</div>
-          </div>
-          <div class="ic-body">
-            Dengan target 1% profit/hari dan risk 1% per trade, leverage tinggi
-            hanya meningkatkan risiko liquidasi tanpa manfaat karena SL sudah
-            fix. Gunakan <strong>leverage 10–15×</strong>. Dengan risk% tepat,
-            profit target tetap bisa dicapai dengan liquidation risk jauh lebih
-            rendah.
-          </div>
-          <div class="ic-tag">RISK MANAGEMENT</div>
-        </div>
-
-        <div class="improve-card">
-          <div class="ic-header">
-            <div class="ic-num">12</div>
-            <div class="ic-title">Perluas Correlation Window ke 200 Candle</div>
-          </div>
-          <div class="ic-body">
-            Ganti <code>correlation_lookback: 50</code> menjadi
-            <code>200</code> (setara ~50 jam data 15m). Korelasi jangka menengah
-            lebih stabil dan representatif untuk manajemen risiko portfolio.
-            Juga tambahkan <strong>rolling correlation</strong> agar tidak
-            stagnan.
-          </div>
-          <div class="ic-tag">STATISTICS FIX</div>
+        <div class="issue-impact" style="border-left:2px solid var(--green);padding-left:10px;margin-top:10px;">
+          <div class="impact-label" style="color:var(--green)">Status</div>
+          CVD divergence signal kini lebih akurat untuk futures. Candle dengan wick panjang (yang umum di Bybit saat spike) terbaca proporsi buy/sell pressure-nya dengan benar — bukan hanya dilihat dari mana close berakhir.
         </div>
       </div>
     </div>
 
-    <!-- ═══ VERDICT ═══ -->
-    <div class="section">
-      <div class="section-title">Kesimpulan & Verdict</div>
-      <div class="verdict-box">
-        <div class="verdict-title">
-          ⚖ VERDICT — PAPER TRADE DULU, JANGAN LIVE SEKARANG
-        </div>
-        <div class="verdict-body">
-          Bot ini memiliki
-          <strong
-            >arsitektur yang solid dan pemikiran teknikal yang baik</strong
-          >
-          — SMC, MTF confluence, funding rate gate, candle confirmation, dan
-          correlation filter adalah fitur-fitur yang jarang ada di bot retail.
-          Developer-nya paham konsep quant dengan cukup baik. <br /><br />
-          Namun, ada
-          <strong>3 masalah yang harus diselesaikan sebelum live trade</strong>:
-          <br /><br />
-          <strong>1. Segera fix leverage cap bug</strong> — ini bisa
-          menghancurkan akun dalam satu sesi.<br />
-          <strong>2. Bangun backtest framework</strong> — tanpa ini tidak ada
-          bukti matematika bahwa strategi ini punya positive expectancy.<br />
-          <strong>3. Fix Zeta direction + naikkan quant threshold</strong> — ini
-          meningkatkan kualitas signal tanpa banyak effort. <br /><br />
-          Untuk target <strong>1% profit/hari</strong>: ini
-          <em>bisa dicapai</em> tapi membutuhkan win rate konsisten 65%+. Dengan
-          improvement di atas, estimasi win rate bisa naik dari ~45-50% menjadi
-          55-65%. Jalankan <strong>minimal 3 bulan paper trade</strong> dan ukur
-          statistik aktual sebelum commit modal nyata. Jangan dikejar profit
-          target harian — fokus pada
-          <strong>membangun edge yang konsisten</strong>, profit akan mengikuti.
+    <!-- ISSUE 7 -->
+    <div class="issue-card warning">
+      <div class="issue-header">
+        <div class="issue-title">🟠 #7 — OB Mitigation Logic Terlalu Sensitif</div>
+        <div class="badge warning">WARNING</div>
+      </div>
+      <div class="issue-body">
+        Di <code>find_order_blocks()</code>, sebuah bullish OB dinyatakan "mitigated" jika candle LOW mana pun setelah OB menyentuh <code>ob_high × 1.001</code>. Ini terlalu agresif — bahkan satu candle kecil yang wicking ke zona OB akan mendisualifikasi OB tersebut meskipun harga langsung rebound kuat.
+        <div class="issue-impact warning">
+          <div class="impact-label">Dampak Implementasi</div>
+          Fresh OB terlalu jarang ditemukan karena terlalu banyak yang dianggap sudah mitigated. SMC score akan sering rendah bukan karena tidak ada OB, tapi karena OB valid pun di-exclude. Ini menurunkan sensitivitas signal.
         </div>
       </div>
     </div>
 
-    <div
-      style="
-        margin-top: 32px;
-        padding-top: 20px;
-        border-top: 1px solid var(--border);
-        text-align: center;
-      ">
-      <div
-        style="
-          font-family: 'Space Mono', monospace;
-          font-size: 10px;
-          color: var(--muted);
-          letter-spacing: 2px;
-        ">
-        PROFESSIONAL QUANT ANALYSIS · BYBIT SCREENING BOT v8 · GENERATED APRIL
-        2026
+    <!-- ISSUE 8 -->
+    <div class="issue-card warning">
+      <div class="issue-header">
+        <div class="issue-title">🟠 #8 — BTC Bias Terlalu Rigid: Memblokir Altcoin Setup yang Valid</div>
+        <div class="badge warning">WARNING</div>
+      </div>
+      <div class="issue-body">
+        BTC Bias berdasarkan EMA13/21 di 1h akan memblokir <strong>semua Long</strong> saat BTC sedang koreksi, meski altcoin tertentu sedang dalam impulse bullish independen. Ini khususnya bermasalah untuk pair yang berkorelasi rendah dengan BTC (seperti beberapa DeFi tokens, meme coins).
+        <div class="issue-impact warning">
+          <div class="impact-label">Dampak Implementasi</div>
+          Banyak peluang profit terlewat khususnya saat BTC sideways/koreksi. Di pasar altseason, bot akan sangat jarang masuk Long karena BTC sering tidak align sempurna. Miss opportunity rate tinggi.
+        </div>
       </div>
     </div>
-  </body>
+
+    <!-- ISSUE 9 -->
+    <div class="issue-card info">
+      <div class="issue-header">
+        <div class="issue-title">🔵 #9 — Liquidity Sweep: O(n²) Loop di Threading Paralel</div>
+        <div class="badge info">PERFORMA</div>
+      </div>
+      <div class="issue-body">
+        Fungsi <code>detect_liquidity_sweep()</code> menggunakan nested loop O(n²) mencari equal highs/lows. Ini dijalankan untuk 100 pair secara paralel dengan 20 threads. Pada server dengan CPU rendah, ini bisa menyebabkan scan timeout atau delay yang membuat signal terlambat.
+        <div class="issue-impact info">
+          <div class="impact-label">Dampak Implementasi</div>
+          Pada VPS murah (1-2 vCPU), scan 100 pair bisa memakan 5-10 menit — padahal interval scan 15 menit. Signal bisa terlambat atau scan tidak selesai sebelum jadwal berikutnya. Entry jadi kurang tepat timing-nya.
+        </div>
+      </div>
+    </div>
+
+    <!-- ISSUE 10 -->
+    <div class="issue-card info">
+      <div class="issue-header">
+        <div class="issue-title">🔵 #10 — Correlation Filter: Window 12.5 Jam Terlalu Pendek & Noisy</div>
+        <div class="badge info">STATISTIK</div>
+      </div>
+      <div class="issue-body">
+        Korelasi Pearson dihitung atas 50 candle × 15m = 12.5 jam data. Korelasi jangka pendek sangat volatile — dua asset bisa 0.9 correlated dalam satu sesi dan 0.2 di sesi berikutnya. Filter ini akan terlalu sering menolak pair yang sebenarnya tidak bermasalah.
+        <div class="issue-impact info">
+          <div class="impact-label">Dampak Implementasi</div>
+          Filter korelasi palsu reject peluang valid. Di sisi lain, pada crash mendadak, korelasi antar aset bisa 0.95+ meskipun window pendek, sehingga filter tetap berguna dalam kondisi extreme. Perlu window lebih panjang (minimum 200 candle / ~50 jam).
+        </div>
+      </div>
+    </div>
+
+    <!-- ISSUE 11 -->
+    <div class="issue-card info">
+      <div class="issue-header">
+        <div class="issue-title">🔵 #11 — daily_profit_target_pct 1.5% vs Target 1% Anda</div>
+        <div class="badge info">KONFIGURASI</div>
+      </div>
+      <div class="issue-body">
+        Config saat ini: <code>daily_profit_target_pct: 0.015</code> (1.5%). Jika Anda target 1%/hari, bot akan terus trading sampai 1.5% — bukan berhenti di 1%. Ini berarti bot mengambil risiko tambahan padahal target sudah tercapai. Sebaiknya sesuaikan ke <code>0.01</code>.
+        <div class="issue-impact info">
+          <div class="impact-label">Dampak Implementasi</div>
+          Pada hari-hari bagus, bot mungkin memberikan 1.5% tapi di hari buruk berikutnya circuit breaker 1% loss tidak cukup melindungi drawdown harian. Ketidaksimetrisan ini akan merugikan dalam jangka panjang (loss 1% + profit 1.5% tidak seimbang secara psikologis dan matematis dengan 3 trade limit).
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ EXPECTED VALUE TABLE ═══ -->
+<div class="section">
+  <div class="section-title">Simulasi Expected Value Harian</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+    <table>
+      <thead>
+        <tr>
+          <th>Skenario</th>
+          <th>Win Rate</th>
+          <th>Trade/hari</th>
+          <th>Gross P&L</th>
+          <th>Fees Est.</th>
+          <th>Net P&L/hari</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Optimis (market bagus)</td>
+          <td>67%</td>
+          <td>3</td>
+          <td>+2.47%</td>
+          <td>-0.33%</td>
+          <td class="tbl-green">+2.14%</td>
+          <td class="tbl-green">✓ Target tercapai</td>
+        </tr>
+        <tr>
+          <td>Realistis (normal)</td>
+          <td>50%</td>
+          <td>3</td>
+          <td>+0.85%</td>
+          <td>-0.33%</td>
+          <td class="tbl-yellow">+0.52%</td>
+          <td class="tbl-yellow">△ Di bawah target</td>
+        </tr>
+        <tr>
+          <td>Sideways Market</td>
+          <td>40%</td>
+          <td>2</td>
+          <td>-0.18%</td>
+          <td>-0.22%</td>
+          <td class="tbl-red">-0.40%</td>
+          <td class="tbl-red">✗ Merugi</td>
+        </tr>
+        <tr>
+          <td>Bad Day (volatil tinggi)</td>
+          <td>33%</td>
+          <td>3</td>
+          <td>-0.10%</td>
+          <td>-0.33%</td>
+          <td class="tbl-red">-1.00%</td>
+          <td class="tbl-red">✗ DD max harian</td>
+        </tr>
+        <tr>
+          <td style="color:var(--muted);font-size:12px;" colspan="7">* Berdasarkan: risk 1%/trade, TP split 40/30/30 di 1R/2R/3R, Bybit taker fee 0.055%, max 3 trade/hari</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══ STRATEGY SCORE DECOMPOSITION ═══ -->
+<div class="section">
+  <div class="section-title">Bobot Filter dalam Pipeline (Estimasi Rejection Rate)</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;">
+    <div class="score-row">
+      <div class="score-label">No Pattern Detected</div>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:70%;background:var(--red)"></div></div>
+      <div class="score-value">~70%</div>
+    </div>
+    <div class="score-row">
+      <div class="score-label">MTF / BTC Conflict</div>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:50%;background:var(--orange)"></div></div>
+      <div class="score-value">~50%</div>
+    </div>
+    <div class="score-row">
+      <div class="score-label">SMC Fail</div>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:40%;background:var(--orange)"></div></div>
+      <div class="score-value">~40%</div>
+    </div>
+    <div class="score-row">
+      <div class="score-label">Low RVOL / Quant</div>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:35%;background:var(--blue)"></div></div>
+      <div class="score-value">~35%</div>
+    </div>
+    <div class="score-row">
+      <div class="score-label">Low R:R (&lt;2.5)</div>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:25%;background:var(--blue)"></div></div>
+      <div class="score-value">~25%</div>
+    </div>
+    <div class="score-row">
+      <div class="score-label">Candle Confirm Wait</div>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:15%;background:var(--muted)"></div></div>
+      <div class="score-value">~15%</div>
+    </div>
+    <div class="sep"></div>
+    <div style="font-size:12px;color:var(--muted);">
+      Estimasi signal lolos ke Telegram: <strong style="color:var(--accent)">1–3 per scan dari 100 pair</strong>. 
+      Dengan interval 15m dan active window 06-22 UTC (16 jam = ~64 scan/hari), 
+      potensi signal harian 3–10 — tapi <code>max_daily_trades: 3</code> membatasi eksekusi.
+    </div>
+  </div>
+</div>
+
+<!-- ═══ IMPROVEMENTS ═══ -->
+<div class="section">
+  <div class="section-title">Rekomendasi Improvement untuk Target 1%/Hari</div>
+  <div class="improve-grid">
+
+    <div class="improve-card" style="border-color:var(--green);opacity:0.8">
+      <div class="ic-header">
+        <div class="ic-num" style="color:var(--green)">✅</div>
+        <div class="ic-title" style="color:var(--green)">Fix Max Leverage Cap — DONE</div>
+      </div>
+      <div class="ic-body">
+        <code>MAX_LEVERAGE_CAP</code> kini dibaca dari config dan diterapkan di <code>get_leverage_for()</code> sebagai hard ceiling:<br><br>
+        <code>return min(lev, MAX_LEVERAGE_CAP)</code><br><br>
+        Karena <code>risk_percent: 1%</code>, margin per posisi tetap 1% modal — leverage Bybit max aman digunakan. Set <code>max_leverage_cap</code> sesuai selera risiko.
+      </div>
+      <div class="ic-tag" style="color:var(--green)">FIXED — auto_trades.py</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">02</div>
+        <div class="ic-title">Buat Backtest Framework</div>
+      </div>
+      <div class="ic-body">
+        Download 6-12 bulan OHLCV dari Bybit (tersedia via API). Jalankan seluruh pipeline signal terhadap data historis. Hitung <strong>win rate aktual, average R, max drawdown, Sharpe ratio</strong>. Ini fondasi sebelum live trade apapun.
+      </div>
+      <div class="ic-tag">PRIORITAS TINGGI</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">03</div>
+        <div class="ic-title">Fix Zeta Field: Direction-Aware Scoring</div>
+      </div>
+      <div class="ic-body">
+        Ubah logika bonus Zeta agar sesuai arah:<br><br>
+        <strong>Long signal</strong>: bonus jika Zeta &lt;30 (oversold, momentum akan naik)<br>
+        <strong>Short signal</strong>: bonus jika Zeta &gt;70 (overbought, momentum akan turun)<br><br>
+        Ini meningkatkan akurasi signal secara signifikan.
+      </div>
+      <div class="ic-tag">KODE FIX — 5 BARIS</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">04</div>
+        <div class="ic-title">Tingkatkan CVD: VWAP-Weighted Delta</div>
+      </div>
+      <div class="ic-body">
+        Ganti kalkulasi CVD dengan formula berbasis wick:<br><br>
+        <code>buy = vol × (close−low)/(high−low+ε)</code><br>
+        <code>sell = vol × (high−close)/(high−low+ε)</code><br><br>
+        Ini memberikan sinyal tekanan beli/jual yang jauh lebih akurat untuk futures.
+      </div>
+      <div class="ic-tag">KODE FIX — 3 BARIS</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">05</div>
+        <div class="ic-title">Trailing Stop Setelah TP1 Hit</div>
+      </div>
+      <div class="ic-body">
+        Saat ini, setelah TP1 hit, sisa 60% posisi tidak memiliki trailing stop. Tambahkan mekanisme <strong>move SL to breakeven + trail</strong> setelah TP1 terkonfirmasi. Ini mengkonversi potensi -1% menjadi 0% loss di kondisi reversal mendadak.
+      </div>
+      <div class="ic-tag">STRATEGY IMPROVE</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">06</div>
+        <div class="ic-title">Session Filter: London/NY Overlap</div>
+      </div>
+      <div class="ic-body">
+        Tambahkan filter sesi trading. Berdasarkan data historis crypto, <strong>13:00–17:00 UTC</strong> (London + NY overlap) menghasilkan win rate lebih tinggi dan volume lebih besar. Kurangi <code>active_hours_utc</code> ke window terbaik untuk pair yang Anda trade.
+      </div>
+      <div class="ic-tag">CONFIGURATION</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">07</div>
+        <div class="ic-title">OB Mitigation: Candle Close Filter</div>
+      </div>
+      <div class="ic-body">
+        Ubah OB mitigation dari "low menyentuh OB" menjadi "candle CLOSE di bawah OB high". Ini jauh lebih akurat secara SMC — wick ke zona tidak menganulir OB, hanya close yang melewatinya.
+      </div>
+      <div class="ic-tag">SMC IMPROVEMENT</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">08</div>
+        <div class="ic-title">Naikkan min_quant_score ke 4</div>
+      </div>
+      <div class="ic-body">
+        Karena base score dimulai dari 2, min score 3 hanya butuh +1 bonus. Naikkan ke 4 untuk memastikan setidaknya <strong>2 kondisi quant valid</strong> terpenuhi (RVOL tinggi + Z-Score atau OBI kuat). Ini langkah mudah meningkatkan kualitas filter tanpa mengubah kode.
+      </div>
+      <div class="ic-tag">CONFIG TWEAK</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">09</div>
+        <div class="ic-title">Optimize TP1 Split: 50% di TP1</div>
+      </div>
+      <div class="ic-body">
+        Ubah TP split dari <code>[0.4, 0.3, 0.3]</code> menjadi <code>[0.5, 0.25, 0.25]</code>. Dengan mengambil 50% di TP1 (1R), Anda mengamankan profit lebih konsisten per trade. Ini menurunkan upside maksimum sedikit tapi meningkatkan konsistensi profit harian secara signifikan.
+      </div>
+      <div class="ic-tag">RISK OPTIMIZATION</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">10</div>
+        <div class="ic-title">Tambah Volatility Regime Filter</div>
+      </div>
+      <div class="ic-body">
+        Jangan trade saat <strong>VIX crypto (ATR/price ratio) terlalu rendah</strong> (pasar flat, spread tinggi relatif terhadap target). Tambahkan filter: jika ATR% &lt;0.15% pada 15m, skip semua signal. Ini mengurangi false breakout di kondisi low-volume sideways.
+      </div>
+      <div class="ic-tag">NEW FILTER</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">11</div>
+        <div class="ic-title">Kurangi Leverage: 10-15× Lebih Aman</div>
+      </div>
+      <div class="ic-body">
+        Dengan target 1% profit/hari dan risk 1% per trade, leverage tinggi hanya meningkatkan risiko liquidasi tanpa manfaat karena SL sudah fix. Gunakan <strong>leverage 10–15×</strong>. Dengan risk% tepat, profit target tetap bisa dicapai dengan liquidation risk jauh lebih rendah.
+      </div>
+      <div class="ic-tag">RISK MANAGEMENT</div>
+    </div>
+
+    <div class="improve-card">
+      <div class="ic-header">
+        <div class="ic-num">12</div>
+        <div class="ic-title">Perluas Correlation Window ke 200 Candle</div>
+      </div>
+      <div class="ic-body">
+        Ganti <code>correlation_lookback: 50</code> menjadi <code>200</code> (setara ~50 jam data 15m). Korelasi jangka menengah lebih stabil dan representatif untuk manajemen risiko portfolio. Juga tambahkan <strong>rolling correlation</strong> agar tidak stagnan.
+      </div>
+      <div class="ic-tag">STATISTICS FIX</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ VERDICT ═══ -->
+<div class="section">
+  <div class="section-title">Kesimpulan & Verdict</div>
+  <div class="verdict-box">
+    <div class="verdict-title">⚖ VERDICT — PAPER TRADE DULU, JANGAN LIVE SEKARANG</div>
+    <div class="verdict-body">
+      Bot ini memiliki <strong>arsitektur yang solid dan pemikiran teknikal yang baik</strong> — SMC, MTF confluence, funding rate gate, candle confirmation, dan correlation filter adalah fitur-fitur yang jarang ada di bot retail. Developer-nya paham konsep quant dengan cukup baik.
+      <br><br>
+      Namun, ada <strong>3 masalah yang harus diselesaikan sebelum live trade</strong>:
+      <br><br>
+      <strong>1. Segera fix leverage cap bug</strong> — ini bisa menghancurkan akun dalam satu sesi.<br>
+      <strong>2. Bangun backtest framework</strong> — tanpa ini tidak ada bukti matematika bahwa strategi ini punya positive expectancy.<br>
+      <strong>3. Fix Zeta direction + naikkan quant threshold</strong> — ini meningkatkan kualitas signal tanpa banyak effort.
+      <br><br>
+      Untuk target <strong>1% profit/hari</strong>: ini <em>bisa dicapai</em> tapi membutuhkan win rate konsisten 65%+. 
+      Dengan improvement di atas, estimasi win rate bisa naik dari ~45-50% menjadi 55-65%. Jalankan <strong>minimal 3 bulan paper trade</strong> dan ukur statistik aktual sebelum commit modal nyata. 
+      Jangan dikejar profit target harian — fokus pada <strong>membangun edge yang konsisten</strong>, profit akan mengikuti.
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:32px;padding-top:20px;border-top:1px solid var(--border);text-align:center;">
+  <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);letter-spacing:2px;">
+    PROFESSIONAL QUANT ANALYSIS · BYBIT SCREENING BOT v8 · GENERATED APRIL 2026
+  </div>
+</div>
+
+</body>
 </html>

@@ -87,9 +87,21 @@ def analyze_derivatives(df, ticker, side):
         score += 1
         reasons.append(f"Funding Favors Long ({funding:.4f})")
 
-    # ── 2. CVD Calculation (Defensive Fix) ───────────────────────────────────
+    # ── 2. CVD Calculation ────────────────────────────────────────────────────
+    # FIX #6: VWAP-based approximation menggantikan binary close>open.
+    # Metode lama mengabaikan wick -- pada futures Bybit taker aggressor
+    # sering terjadi di wick, bukan di close. Pendekatan baru:
+    #   buy_vol  = volume x (close - low)  / (high - low + epsilon)
+    #   sell_vol = volume x (high - close) / (high - low + epsilon)
+    #   delta    = buy_vol - sell_vol
+    # Hasilnya lebih akurat karena memperhitungkan tekanan intra-candle
+    # secara proporsional -- bukan hanya lihat close > open.
     if "CVD" not in df.columns:
-        df["delta"] = np.where(df["close"] > df["open"], df["volume"], -df["volume"])
+        hl_range    = (df["high"] - df["low"]).clip(lower=1e-12)
+        df["delta"] = (
+            df["volume"] * (df["close"] - df["low"])  / hl_range
+            - df["volume"] * (df["high"] - df["close"]) / hl_range
+        )
         df["CVD"]   = df["delta"].cumsum()
 
     # ── 3. CVD Divergence Analysis (Price Slope vs CVD Slope) ────────────────
