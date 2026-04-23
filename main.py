@@ -598,7 +598,7 @@ def _step_score_filters(
         order_book = {}
 
     df, basis, z_score, zeta_score, obi, quant_score, quant_reasons = calculate_metrics(
-        df, ticker_info, order_book
+        df, ticker_info, order_book, side=side
     )
 
     # Derivatives

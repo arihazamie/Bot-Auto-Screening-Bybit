@@ -43,6 +43,7 @@ RISK_PERCENT   = RISK['risk_percent']
 MAX_POSITIONS  = RISK['max_positions']
 TP_SPLIT       = RISK['tp_split']
 USE_MAX_LEVERAGE = RISK.get('use_max_leverage', False)
+MAX_LEVERAGE_CAP = RISK.get('max_leverage_cap', 100)  # Hard cap — tidak bisa dilewati meski Bybit izinkan lebih
 MAX_DAILY_LOSS = RISK.get('max_daily_loss_pct', 0.01)
 DAILY_TARGET   = RISK.get('daily_profit_target_pct', 0.015)
 MAX_DAILY_TRADES = RISK.get('max_daily_trades', 3)
@@ -92,9 +93,21 @@ def normalize_rr_targets(sig: dict):
 
 
 def get_leverage_for(symbol: str) -> int:
+    """
+    Tentukan leverage untuk satu symbol.
+    - use_max_leverage: true  → ambil max leverage per coin dari Bybit, di-cap oleh max_leverage_cap
+    - use_max_leverage: false → pakai target_leverage (fixed semua coin), tetap di-cap
+    max_leverage_cap adalah hard ceiling — tidak bisa dilewati apapun yang Bybit izinkan.
+    """
     if not USE_MAX_LEVERAGE:
-        return TARGET_LEV
-    return client.fetch_max_leverage(symbol, fallback=TARGET_LEV)
+        return min(TARGET_LEV, MAX_LEVERAGE_CAP)
+    lev = client.fetch_max_leverage(symbol, fallback=TARGET_LEV)
+    if lev > MAX_LEVERAGE_CAP:
+        logger.debug(
+            f"[{symbol}] leverage Bybit={lev}x → di-cap menjadi {MAX_LEVERAGE_CAP}x "
+            f"(max_leverage_cap={MAX_LEVERAGE_CAP}x)"
+        )
+    return min(lev, MAX_LEVERAGE_CAP)
 
 def place_split_tps(symbol: str, side: str, total_qty: float, tp1, tp2, tp3) -> bool:
     """Place 3 limit TP orders on Bybit (real mode only)."""
@@ -492,7 +505,10 @@ if __name__ == "__main__":
     logger.info(f"🟢 Starting Auto-Trader — {mode_banner}")
     logger.info(f"   Max positions : {MAX_POSITIONS}")
     logger.info(f"   Risk/trade    : {RISK_PERCENT * 100}%")
-    logger.info(f"   Leverage      : {TARGET_LEV}x")
+    if USE_MAX_LEVERAGE:
+        logger.info(f"   Leverage      : Max per-coin (Bybit), cap={MAX_LEVERAGE_CAP}x")
+    else:
+        logger.info(f"   Leverage      : Fixed {TARGET_LEV}x (cap={MAX_LEVERAGE_CAP}x)")
 
     init_db()
 
