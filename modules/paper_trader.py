@@ -52,6 +52,42 @@ logger = logging.getLogger("PaperTrader")
 # Total harus 100% (0.4 + 0.3 + 0.3 = 1.0).
 TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT = CONFIG["risk"].get("tp_split", [0.4, 0.3, 0.3])
 
+# ─── ANOMALY HARDENING (fix G + H) ────────────────────────────────────────────
+# Real Bybit fills are not at the exact mark price. Simulate a configurable
+# slippage + spread cost so paper PnL is not optimistic vs production.
+# Defaults: 5 bps slippage, 2 bps spread, reject fill if spread > 50 bps.
+_PAPER_RISK            = CONFIG.get("risk", {})
+PAPER_SLIPPAGE_BPS     = float(_PAPER_RISK.get("paper_slippage_bps",    5.0))
+PAPER_SPREAD_BPS       = float(_PAPER_RISK.get("paper_spread_bps",     2.0))
+PAPER_MAX_SPREAD_BPS   = float(_PAPER_RISK.get("paper_max_spread_bps", 50.0))
+
+
+def _bps(p: float, b: float) -> float:
+    """Return absolute price equivalent of `b` basis points on price `p`."""
+    return p * (b / 10_000.0)
+
+
+def _apply_entry_slippage(side: str, price: float) -> float:
+    """
+    Fix G — Long entries fill slightly higher than the touch, Short slightly
+    lower (taker semantics). Combines slippage + half-spread.
+    """
+    cost = _bps(price, PAPER_SLIPPAGE_BPS) + _bps(price, PAPER_SPREAD_BPS / 2.0)
+    return price + cost if side == "Long" else price - cost
+
+
+def _apply_exit_slippage(side: str, price: float, is_loss: bool) -> float:
+    """
+    Fix G — Always degrade the exit price by slippage. For losing exits the
+    slippage is on the unfavourable side; for winning exits the maker-style
+    fill nibbles a small amount as well (still configured by SLIPPAGE_BPS).
+    """
+    cost = _bps(price, PAPER_SLIPPAGE_BPS) + _bps(price, PAPER_SPREAD_BPS / 2.0)
+    if side == "Long":
+        return price - cost            # Long fill at exit → lower (worse for win, worse for SL)
+    return price + cost                # Short fill at exit → higher (worse for win, worse for SL)
+
+
 # ─── UI Helpers ───────────────────────────────────────────────────────────────
 
 SEP  = "━━━━━━━━━━━━━━━━━━━━━━━"
@@ -200,8 +236,22 @@ def paper_execute(trade: dict, current_price: float) -> bool:
     if not filled:
         return False
 
-    update_active_trade(trade['id'], {"status": "OPEN", "entry_price": current_price})
-    logger.info(f"📋 [PAPER] Entry filled: {trade['symbol']} {side} @ {current_price}")
+    # Fix G — simulate realistic taker fill (slippage + half-spread).
+    fill_price = _apply_entry_slippage(side, current_price)
+    spread_bps = abs(fill_price - current_price) / max(current_price, 1e-9) * 10_000.0
+    if spread_bps > PAPER_MAX_SPREAD_BPS:
+        logger.warning(
+            f"[PAPER] {trade['symbol']} reject fill: simulated spread "
+            f"{spread_bps:.1f}bps > max {PAPER_MAX_SPREAD_BPS:.0f}bps"
+        )
+        return False
+
+    update_active_trade(trade['id'], {"status": "OPEN", "entry_price": fill_price})
+    logger.info(
+        f"📋 [PAPER] Entry filled: {trade['symbol']} {side} @ {fill_price} "
+        f"(touch {current_price}, slippage {spread_bps:.1f}bps)"
+    )
+    current_price = fill_price
 
     qty     = float(trade.get('quantity', 0))
     lev     = int(trade.get('leverage', 1))
@@ -395,7 +445,16 @@ def paper_monitor(trade: dict, current_price: float):
     # ── SL Hit ──────────────────────────────────────────────────────────────
     if sl_hit:
         remaining = _remaining_qty(qty, tp1_logged, tp2_logged)
-        pnl       = _calc_pnl(side, entry, eff_sl, remaining)
+
+        # Fix H — gap-to-loss should fill at the worse of (eff_sl, current_price)
+        # plus exit slippage. Real exchange does not magically print SL exactly
+        # when price gapped through it.
+        if side == 'Long':
+            gap_fill = min(eff_sl, current_price)
+        else:
+            gap_fill = max(eff_sl, current_price)
+        exit_price = _apply_exit_slippage(side, gap_fill, is_loss=True)
+        pnl        = _calc_pnl(side, entry, exit_price, remaining)
 
         if tp2_logged:
             reason = "SL Trail (TP1 level)"
@@ -403,14 +462,29 @@ def paper_monitor(trade: dict, current_price: float):
             reason = "Breakeven SL"
         else:
             reason = "Stop Loss"
+        if abs(exit_price - eff_sl) > _bps(eff_sl, 1.0):
+            reason += " (gap)"
 
-        _close_paper_trade(t_id, sym, side, entry, eff_sl, pnl, reason, tg_id,
+        _close_paper_trade(t_id, sym, side, entry, exit_price, pnl, reason, tg_id,
                            qty=remaining, lev=lev)
         return
 
     # ── TP3 Hit (close remaining 40%) ────────────────────────────────────────
     if tp3_hit:
-        # Cascade TP1 jika belum
+        # Fix H — detect a single-tick gap straight to TP3 without intermediate
+        # fills at TP1/TP2. Without wick info we cannot prove the price wicked
+        # through TP1/TP2; closing the whole position at current_price is more
+        # conservative than fabricating clean TP1/TP2 fills.
+        gap_to_profit = (not tp1_logged) and (not tp2_logged)
+        if gap_to_profit:
+            remaining  = qty
+            exit_price = _apply_exit_slippage(side, current_price, is_loss=False)
+            pnl        = _calc_pnl(side, entry, exit_price, remaining)
+            _close_paper_trade(t_id, sym, side, entry, exit_price, pnl,
+                               "TP3 (gap)", tg_id, qty=remaining, lev=lev)
+            return
+
+        # Cascade TP1 jika belum (price wicked through)
         if not tp1_logged:
             _handle_tp1_partial(trade, cascade=True)
             trade['_tp1_logged'] = True
@@ -423,9 +497,10 @@ def paper_monitor(trade: dict, current_price: float):
             tp2_logged = True
 
         # Close sisa 40% di TP3
-        remaining = _remaining_qty(qty, tp1_logged, tp2_logged)
-        pnl       = _calc_pnl(side, entry, tp3, remaining)
-        _close_paper_trade(t_id, sym, side, entry, tp3, pnl, "TP3", tg_id,
+        remaining  = _remaining_qty(qty, tp1_logged, tp2_logged)
+        exit_price = _apply_exit_slippage(side, tp3, is_loss=False)
+        pnl        = _calc_pnl(side, entry, exit_price, remaining)
+        _close_paper_trade(t_id, sym, side, entry, exit_price, pnl, "TP3", tg_id,
                            qty=remaining, lev=lev)
         return
 
