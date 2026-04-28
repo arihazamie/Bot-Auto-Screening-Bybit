@@ -42,6 +42,7 @@ import pandas as pd
 import pandas_ta as ta
 
 from modules.config_loader import CONFIG
+from modules.indicators import wilder_atr_pct
 
 logger = logging.getLogger("Regime")
 
@@ -57,16 +58,11 @@ LABELS = ("TREND_BULL", "TREND_BEAR", "RANGE", "SQUEEZE", "ANOMALY", "UNKNOWN")
 
 
 def _atr_pct(df: pd.DataFrame, length: int = 14) -> float:
-    if len(df) < length + 1:
-        return 0.0
-    high  = df["high"].iloc[-length:].values
-    low   = df["low"].iloc[-length:].values
-    close = df["close"].iloc[-length - 1: -1].values
-    tr = np.maximum(high - low, np.maximum(np.abs(high - close), np.abs(low - close)))
-    last_close = float(df["close"].iloc[-1])
-    if not len(tr) or last_close <= 0:
-        return 0.0
-    return float(np.mean(tr)) / last_close
+    """
+    Wilder ATR% — single source of truth for ATR-based gates across
+    patterns / smc / regime / SL distance. See modules.indicators.
+    """
+    return wilder_atr_pct(df, length=length)
 
 
 def _bbw_series(close: pd.Series, length: int = 20, mult: float = 2.0) -> pd.Series:
@@ -74,9 +70,15 @@ def _bbw_series(close: pd.Series, length: int = 20, mult: float = 2.0) -> pd.Ser
     bb = ta.bbands(close, length=length, std=mult)
     if bb is None or bb.empty:
         return pd.Series(dtype=float)
-    upper = next((c for c in bb.columns if c.startswith("BBU_")), bb.columns[0])
-    lower = next((c for c in bb.columns if c.startswith("BBL_")), bb.columns[2])
-    middle = next((c for c in bb.columns if c.startswith("BBM_")), bb.columns[1])
+    upper  = next((c for c in bb.columns if c.startswith("BBU_")), None)
+    lower  = next((c for c in bb.columns if c.startswith("BBL_")), None)
+    middle = next((c for c in bb.columns if c.startswith("BBM_")), None)
+    if not (upper and lower and middle):
+        logger.warning(
+            f"_bbw_series: cannot identify BBU/BBL/BBM in {list(bb.columns)} — "
+            "regime classifier skipping BBW"
+        )
+        return pd.Series(dtype=float)
     width = (bb[upper] - bb[lower]) / bb[middle]
     return width.dropna()
 

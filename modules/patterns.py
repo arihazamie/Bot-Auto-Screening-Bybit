@@ -28,6 +28,7 @@ import numpy as np
 from scipy.signal import argrelextrema
 from scipy.stats import linregress
 from modules.config_loader import CONFIG
+from modules.indicators import wilder_atr
 
 logger = logging.getLogger("Patterns")
 
@@ -96,14 +97,19 @@ def _has_volume_confirmation(df, lookback: int = 10) -> bool:
 
 def _adx_ok(df) -> bool:
     """
-    Trend-strength gate (fix A). Returns True if ADX(14) >= MIN_PATTERN_ADX
-    or if ADX column is missing (fail-open to keep backwards compat for callers
-    that compute pattern before technicals).
+    Trend-strength gate (fix A). Returns True if ADX(14) >= MIN_PATTERN_ADX.
+
+    Fail-open ONLY when the ADX column is genuinely missing (caller computed
+    pattern before technicals). NaN values are treated as **fail-closed** —
+    NaN < threshold evaluates to False in Python, which would silently let
+    bad-data candles bypass the gate. We require finite, gateable values.
     """
     if "adx" not in df.columns or MIN_PATTERN_ADX <= 0:
         return True
     try:
         last = float(df["adx"].iloc[-1])
+        if not np.isfinite(last):
+            return False
         return last >= MIN_PATTERN_ADX
     except Exception:
         return True
@@ -131,16 +137,13 @@ def _has_valid_pole(df, pivot_idx: int, direction: str,
 
 def _atr_proxy(df, length: int = 14) -> float:
     """
-    Cheap ATR proxy without depending on pandas_ta (used inside pattern guards
-    where we may not have the indicator pre-computed).
+    Wilder ATR — shared with main.resolve_atr / smc / regime so all gate
+    thresholds use the same canonical ATR formula. Previously this was a
+    simple mean of TR which deviated 5–15% from Wilder, causing pattern
+    reject thresholds to fire at different conditions than SL distance
+    computation.
     """
-    if len(df) < length + 1:
-        return 0.0
-    high  = df["high"].iloc[-length:].values
-    low   = df["low"].iloc[-length:].values
-    close = df["close"].iloc[-length - 1: -1].values
-    tr = np.maximum(high - low, np.maximum(np.abs(high - close), np.abs(low - close)))
-    return float(np.mean(tr)) if len(tr) else 0.0
+    return wilder_atr(df, length=length)
 
 
 def _double_pattern_valid(df, idxs, kind: str) -> bool:

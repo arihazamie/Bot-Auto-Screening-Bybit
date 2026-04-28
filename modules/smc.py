@@ -54,6 +54,7 @@ import numpy as np
 from scipy.signal import argrelextrema
 
 from modules.config_loader import CONFIG
+from modules.indicators import wilder_atr_pct
 
 logger = logging.getLogger("SMC")
 
@@ -65,28 +66,28 @@ PREM_DISC_WINDOW          = int(_SMC_CFG.get("smc_premdisc_window", 80))
 
 
 def _adx_value(df) -> float:
-    """Read last ADX(14) from df, fail-soft to 100 (treat unknown as 'trending')."""
+    """
+    Last ADX(14) from df. Fail-soft to a high value ("treat unknown as
+    trending") only when the column is genuinely missing; NaN values are
+    returned as 0.0 so trend-strength gates fail-CLOSED for bad data.
+    """
     if "adx" not in df.columns:
         return 100.0
     try:
         v = float(df["adx"].iloc[-1])
-        return v if np.isfinite(v) else 100.0
+        return v if np.isfinite(v) else 0.0
     except Exception:
         return 100.0
 
 
 def _atr_pct(df, length: int = 14) -> float:
-    """Cheap ATR% proxy without depending on pandas_ta."""
-    if len(df) < length + 1:
-        return 0.0
-    high  = df["high"].iloc[-length:].values
-    low   = df["low"].iloc[-length:].values
-    close = df["close"].iloc[-length - 1: -1].values
-    tr = np.maximum(high - low, np.maximum(np.abs(high - close), np.abs(low - close)))
-    if not len(tr):
-        return 0.0
-    last_close = float(df["close"].iloc[-1])
-    return float(np.mean(tr)) / last_close if last_close > 0 else 0.0
+    """
+    Wilder-smoothed ATR / close. Routed through modules.indicators so the
+    gate value matches the ATR used by main.resolve_atr (SL/TP) and the
+    regime classifier; previously this was a simple mean of TR which
+    differed by 5–15% from Wilder.
+    """
+    return wilder_atr_pct(df, length=length)
 
 
 # ── Pivot helpers ─────────────────────────────────────────────────────────────
