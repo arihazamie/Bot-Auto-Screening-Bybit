@@ -18,9 +18,24 @@ import os
 import re
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from modules.config_loader import CONFIG
+
+# All DB timestamps are written as ISO-8601 UTC strings. SQLite still parses
+# them with DATE()/datetime() because the leading 'YYYY-MM-DD HH:MM:SS' prefix
+# matches its built-in parser. Storing UTC consistently fixes the local-vs-UTC
+# mismatch that used to make MAX_DAILY_TRADES reset at local midnight.
+
+
+def _utcnow_str() -> str:
+    """Naive-format ISO string but anchored to UTC. Stored as 'YYYY-MM-DD HH:MM:SS.ffffff'."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def _utctoday_str() -> str:
+    """UTC date as 'YYYY-MM-DD' for SQLite DATE() comparisons."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 # ─── Path ─────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
@@ -176,7 +191,7 @@ def init_db():
     # Seed paper_state (single row, never deleted)
     c.execute(
         "INSERT OR IGNORE INTO paper_state (id, balance, updated_at) VALUES (1, ?, ?)",
-        (CONFIG['risk']['paper_balance'], str(datetime.now()))
+        (CONFIG['risk']['paper_balance'], _utcnow_str())
     )
     c.commit()
     print(f"SQLite ready (WAL) — {DB_PATH}")
@@ -198,7 +213,7 @@ def insert_signal(data: dict) -> int:
             data.get('tp2'),             data.get('tp3'),
             data.get('rr'),              data.get('pattern'),
             data.get('btc_bias'),        data.get('telegram_msg_id'),
-            str(datetime.now()),
+            _utcnow_str(),
         )
     )
     c.commit()
@@ -218,11 +233,26 @@ def mark_signal_ingested(signal_id: int):
     c.commit()
 
 
+def try_claim_signal(signal_id: int) -> bool:
+    """
+    Atomic claim of a waiting signal. Returns True iff this caller flipped
+    `ingested` from 0 to 1. Used to prevent the paper-runner double-firing
+    bug (TOCTOU between get_waiting_signals → insert_active_trade → mark).
+    """
+    c = _conn()
+    cur = c.execute(
+        "UPDATE signals SET ingested = 1 WHERE id = ? AND ingested = 0",
+        (signal_id,),
+    )
+    c.commit()
+    return cur.rowcount > 0
+
+
 # ─── Active Trades ─────────────────────────────────────────────────────────────
 
 def insert_active_trade(data: dict) -> int:
     c   = _conn()
-    now = str(datetime.now())
+    now = _utcnow_str()
     cur = c.execute(
         """INSERT INTO active_trades
            (signal_id, symbol, side, timeframe, entry_price, sl_price,
@@ -256,7 +286,7 @@ def update_active_trade(trade_id: int, fields: dict):
     if not safe:
         return
 
-    safe['updated_at'] = str(datetime.now())
+    safe['updated_at'] = _utcnow_str()
 
     # Convert bool → int for SQLite boolean columns
     for col in _BOOL_COLS:
@@ -304,7 +334,7 @@ def count_open_active_trades() -> int:
 
 
 def get_closed_trades_last_24h() -> list:
-    since = str(datetime.now() - timedelta(hours=24))
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S.%f")
     rows  = _conn().execute(
         "SELECT * FROM active_trades WHERE status = 'CLOSED' AND updated_at >= ?",
         (since,)
@@ -313,7 +343,7 @@ def get_closed_trades_last_24h() -> list:
 
 
 def get_closed_trades_today() -> list:
-    today = datetime.now().date().isoformat()
+    today = _utctoday_str()
     rows  = _conn().execute(
         "SELECT * FROM active_trades WHERE status = 'CLOSED' AND DATE(updated_at) = ?",
         (today,)
@@ -322,7 +352,7 @@ def get_closed_trades_today() -> list:
 
 
 def get_trades_last_24h() -> list:
-    since = str(datetime.now() - timedelta(hours=24))
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S.%f")
     rows  = _conn().execute(
         "SELECT * FROM active_trades WHERE created_at >= ?",
         (since,)
@@ -331,9 +361,24 @@ def get_trades_last_24h() -> list:
 
 
 def get_trades_today() -> list:
-    today = datetime.now().date().isoformat()
+    today = _utctoday_str()
     rows  = _conn().execute(
         "SELECT * FROM active_trades WHERE DATE(created_at) = ?",
+        (today,)
+    ).fetchall()
+    return [_to_dict(r) for r in rows]
+
+
+def get_active_trades_today() -> list:
+    """
+    Like get_trades_today() but excludes CANCELLED/FAILED so that expired
+    PENDING orders do not consume the daily-trade quota (fix #4).
+    """
+    today = _utctoday_str()
+    rows  = _conn().execute(
+        "SELECT * FROM active_trades "
+        "WHERE DATE(created_at) = ? "
+        "AND status NOT IN ('CANCELLED','FAILED')",
         (today,)
     ).fetchall()
     return [_to_dict(r) for r in rows]
@@ -347,12 +392,41 @@ def get_paper_balance() -> float:
 
 
 def update_paper_balance(new_balance: float):
+    """Replace balance outright. Prefer add_paper_balance() for atomic deltas."""
     c = _conn()
     c.execute(
         "UPDATE paper_state SET balance = ?, updated_at = ? WHERE id = 1",
-        (new_balance, str(datetime.now()))
+        (new_balance, _utcnow_str())
     )
     c.commit()
+
+
+def add_paper_balance(delta: float) -> float:
+    """
+    Atomically apply +delta (negative for losses) to paper_state.balance and
+    return the new balance. SQLite serialises writes in WAL mode, so this
+    avoids the read-modify-write race that lost PnL when two trades closed
+    concurrently (fix #1B).
+    """
+    c = _conn()
+    cur = c.execute(
+        "UPDATE paper_state SET balance = balance + ?, updated_at = ? "
+        "WHERE id = 1",
+        (float(delta), _utcnow_str()),
+    )
+    if cur.rowcount == 0:
+        # Row missing (init failed?) — fall back to a seed insert.
+        seed = float(CONFIG['risk'].get('paper_balance', 0)) + float(delta)
+        c.execute(
+            "INSERT OR REPLACE INTO paper_state (id, balance, updated_at) "
+            "VALUES (1, ?, ?)",
+            (seed, _utcnow_str()),
+        )
+        c.commit()
+        return seed
+    c.commit()
+    row = c.execute("SELECT balance FROM paper_state WHERE id = 1").fetchone()
+    return float(row['balance']) if row else 0.0
 
 
 # ─── Daily Reports ─────────────────────────────────────────────────────────────
@@ -388,7 +462,7 @@ def insert_trade(data: dict) -> int:
             data.get('zeta_score'),    data.get('obi'),           data.get('tech_reasons'),
             data.get('quant_reasons'), data.get('deriv_reasons'), data.get('smc_reasons'),
             data.get('message_id'),    data.get('channel_id'),
-            data.get('status', 'OPEN'), str(datetime.now()),
+            data.get('status', 'OPEN'), _utcnow_str(),
         )
     )
     c.commit()
