@@ -165,11 +165,12 @@ class BybitClient:
         self._leverage_lock  = threading.Lock()
         self._leverage_ttl   = 6 * 3600   # 6 jam dalam detik
 
-        # Cache OHLCV per (symbol, timeframe) — mengurangi API call saat scan
-        # FIX #06: TTL dihitung DINAMIS per timeframe (75% dari durasi 1 candle)
-        #   • 15m → TTL ≈ 11 menit   • 1h  → TTL ≈ 45 menit
-        #   • 4h  → TTL ≈ 3 jam      • 1d  → TTL ≈ 18 jam
-        # Ini menjamin pattern detection selalu menggunakan data candle terbaru.
+        # Cache OHLCV per (symbol, timeframe) — mengurangi API call saat scan.
+        # Validasi BOUNDARY-AWARE (lihat _is_cache_fresh): cache valid selama
+        # fetched_at dan now masih di periode candle yang sama. Begitu candle
+        # TF berikutnya close, cache otomatis invalidate sehingga scan tepat
+        # di boundary (mis. 11:00:05 untuk 1h) selalu re-fetch dan dapat
+        # candle yang baru close.
         # Struktur: { (symbol, timeframe): (DataFrame, fetched_at: float) }
         self._ohlcv_cache: dict[tuple, tuple] = {}
         self._ohlcv_lock  = threading.Lock()
@@ -284,7 +285,7 @@ class BybitClient:
         return ok
 
     # ─────────────────────────────────────────────
-    # FIX #06: Dynamic OHLCV Cache TTL
+    # OHLCV Cache — boundary-aware
     # ─────────────────────────────────────────────
 
     # Durasi satu candle dalam detik untuk setiap timeframe
@@ -294,25 +295,24 @@ class BybitClient:
         "2h":  7200,  "4h":  14400, "6h":  21600,
         "12h": 43200, "1d":  86400, "1w":  604800,
     }
-    # Cache-expiry factor: 0.75 → cache kadaluarsa di 75% jalan candle berikutnya
-    # Cukup fresh untuk menghindari stale pattern, tapi hemat API call.
-    _TTL_FACTOR: float = 0.75
 
-    def _get_ohlcv_ttl(self, timeframe: str) -> float:
+    def _is_cache_fresh(self, timeframe: str, fetched_at: float, now: float) -> bool:
         """
-        FIX #06 — Hitung TTL cache OHLCV secara dinamis berdasarkan timeframe.
+        Cache fresh ⇔ fetched_at dan now masih di periode candle yang sama.
 
-        Rumus: TTL = durasi_candle × _TTL_FACTOR
+        Konkret: kalau fetch dilakukan jam 10:17 untuk TF 1h, candle period
+        index = 10:17 // 3600 = epoch 10:00. Selama scan berikutnya juga
+        masih < 11:00 (epoch yang sama), cache masih relevan karena tidak
+        ada candle 1h yang baru close. Begitu now ≥ 11:00:00, period index
+        bertambah → cache invalid → fetch ulang untuk dapat candle baru.
 
-        Contoh:
-          15m →  900 × 0.75 = 675 detik  (≈11 menit)
-          1h  → 3600 × 0.75 = 2700 detik (≈45 menit)
-          4h  → 14400 × 0.75 = 10800 detik (≈3 jam)
+        Hasil: scan tepat di boundary (11:00:05) selalu re-fetch, tidak
+        lagi terjebak TTL stale 45 menit lama.
 
-        Unknown timeframe → fallback 900 × 0.75 = 675 detik (konservatif).
+        Unknown timeframe → fallback ke 15m supaya tidak cache forever.
         """
         candle_sec = self._TF_SECONDS.get(timeframe, 900)
-        return candle_sec * self._TTL_FACTOR
+        return int(fetched_at // candle_sec) == int(now // candle_sec)
 
     # ─────────────────────────────────────────────
     # fetch_ohlcv
@@ -326,8 +326,9 @@ class BybitClient:
     ) -> Optional[pd.DataFrame]:
         """
         Fetch OHLCV dan return sebagai DataFrame.
-        Hasil di-cache selama 13 menit per (symbol, timeframe) untuk mengurangi
-        jumlah API call saat scan banyak pair sekaligus.
+        Hasil di-cache per (symbol, timeframe) dengan validasi boundary-aware:
+        cache invalidate begitu candle TF berikutnya close, sehingga scan tepat
+        di boundary candle (mis. 11:00:05 untuk 1h) selalu dapat data fresh.
 
         Return None jika data tidak cukup (bukan exception).
         Kolom: timestamp (datetime), open, high, low, close, volume
@@ -336,16 +337,16 @@ class BybitClient:
         cache_key = (sym, timeframe)
         now       = time.time()
 
-        # ── Cache read (fast path) — TTL dinamis per timeframe (FIX #06) ─────
-        ttl    = self._get_ohlcv_ttl(timeframe)
+        # ── Cache read (fast path) — boundary-aware ─────────────────────────
+        # Cache valid hanya selama belum ada candle TF baru yang close.
+        # Begitu boundary candle terlewati → invalidate, fetch ulang.
         cached = self._ohlcv_cache.get(cache_key)
         if cached is not None:
             df_cached, fetched_at = cached
-            age = now - fetched_at
-            if age < ttl:
+            if self._is_cache_fresh(timeframe, fetched_at, now):
                 logger.debug(
                     f"fetch_ohlcv [{sym}/{timeframe}] — cache HIT "
-                    f"({age:.0f}s old, TTL={ttl:.0f}s)"
+                    f"({now - fetched_at:.0f}s old, same candle period)"
                 )
                 return df_cached.copy()
 
