@@ -14,7 +14,7 @@ Loop ini menangani:
 import time
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from modules.config_loader import CONFIG
@@ -28,9 +28,11 @@ from modules.database import (
     count_open_active_trades,
     get_waiting_signals,
     mark_signal_ingested,
+    try_claim_signal,
     get_closed_trades_last_24h,
     get_closed_trades_today,
     get_trades_today,
+    get_active_trades_today,
     get_paper_balance,
     save_daily_report,
 )
@@ -98,9 +100,13 @@ def _get_leverage_for(symbol: str) -> int:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _daily_entry_limit_reached() -> bool:
-    """Return True jika target/loss/jumlah trade harian sudah membatasi entry baru."""
+    """Return True jika target/loss/jumlah trade harian sudah membatasi entry baru.
+
+    Fix #4: counter hanya menghitung trade yang benar-benar terisi atau
+    masih hidup. CANCELLED/FAILED tidak konsumsi slot harian.
+    """
     try:
-        trades_today = get_trades_today()
+        trades_today = get_active_trades_today()
         if MAX_DAILY_TRADES and len(trades_today) >= MAX_DAILY_TRADES:
             logger.warning(
                 f"🛑 Daily trade limit reached — {len(trades_today)}/{MAX_DAILY_TRADES}. "
@@ -151,7 +157,7 @@ def _ingest_signals():
         return
 
     open_count = count_open_active_trades()
-    daily_count = len(get_trades_today())
+    daily_count = len(get_active_trades_today())   # fix #4: exclude CANCELLED/FAILED
     signals = get_waiting_signals()
 
     if signals:
@@ -207,6 +213,12 @@ def _ingest_signals():
             mark_signal_ingested(sig["id"])
             continue
 
+        # Fix #1B: atomic claim sebelum insert. Jika False, sinyal sudah
+        # diambil thread/instance lain — lewati tanpa duplicate active_trade.
+        if not try_claim_signal(sig["id"]):
+            logger.debug(f"[{sym}] signal {sig['id']} already claimed by another worker, skip")
+            continue
+
         insert_active_trade({
             "signal_id":       sig["id"],
             "symbol":          sym,
@@ -219,7 +231,6 @@ def _ingest_signals():
             "mode":            MODE,
             "telegram_msg_id": tg_msg_id,   # ✅ simpan untuk reply selanjutnya
         })
-        mark_signal_ingested(sig["id"])
         open_count += 1
         daily_count += 1
 
@@ -257,12 +268,19 @@ def _expire_pending_if_old(trade: dict) -> bool:
     Cek apakah PENDING trade sudah melewati batas waktu 24 jam.
     Jika ya, cancel dan kirim notifikasi. Returns True jika di-expire.
     """
+    raw = trade.get("created_at", "")
     try:
-        created_at = datetime.fromisoformat(trade.get("created_at", ""))
+        created_at = datetime.fromisoformat(raw)
     except (ValueError, TypeError):
-        return False
+        try:
+            # Format DB (UTC, fix #2): 'YYYY-MM-DD HH:MM:SS.ffffff'
+            created_at = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S.%f")
+        except (ValueError, TypeError):
+            return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
 
-    age_hours = (datetime.now() - created_at).total_seconds() / 3600
+    age_hours = (datetime.now(timezone.utc) - created_at).total_seconds() / 3600
     if age_hours < PENDING_EXPIRE_HOURS:
         return False
 
@@ -286,7 +304,7 @@ def _expire_pending_if_old(trade: dict) -> bool:
         f"📌 <b>{sym}</b>  {_side_label(side)}\n"
         f"💰 Entry <code>{_fp(entry)}</code> tidak pernah terisi\n"
         f"⌛ Expired setelah <b>{PENDING_EXPIRE_HOURS} jam</b>\n\n"
-        f"<i>🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+        f"<i>🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</i>"
     )
     send_reply(msg, reply_to_message_id=tg_id)
     return True
@@ -371,9 +389,9 @@ def _daily_report():
         "best_trade":    max(pnls),
         "worst_trade":   min(pnls),
         "paper_balance": balance,
-        "generated_at":  str(datetime.now()),
+        "generated_at":  datetime.now(timezone.utc).isoformat(),
     }
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     save_daily_report(date_str, report)
 
     msg = (
@@ -426,9 +444,10 @@ def _run_loop():
                 _ingest_signals()
                 last_ingest = now
 
-            # Daily report jam 07:00
-            current_day  = datetime.now().day
-            current_hour = datetime.now().hour
+            # Daily report jam 07:00 UTC (sebelumnya local time, fix #2)
+            now_utc      = datetime.now(timezone.utc)
+            current_day  = now_utc.day
+            current_hour = now_utc.hour
             if current_hour == 7 and current_day != last_report_day:
                 _daily_report()
                 last_report_day = current_day

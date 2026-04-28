@@ -37,6 +37,7 @@ from modules.config_loader import CONFIG
 from modules.database import (
     get_paper_balance,
     update_paper_balance,
+    add_paper_balance,
     update_active_trade,
     get_active_trades_by_status,
 )
@@ -207,13 +208,14 @@ def _effective_sl(trade: dict) -> float:
 
 
 def _apply_partial_balance(pnl: float, label: str, symbol: str) -> float:
-    """Update balance dengan partial PnL realtime. Returns new balance."""
-    balance = get_paper_balance()
-    new_balance = balance + pnl
-    update_paper_balance(new_balance)
+    """
+    Atomically apply +pnl to paper balance. Uses SQLite UPDATE ... balance = balance + ?
+    so two trades closing concurrently never lose updates (fix #1B).
+    """
+    new_balance = add_paper_balance(pnl)
     logger.info(
         f"💰 [PAPER] {symbol} {label} partial — PnL: ${pnl:+.4f} "
-        f"| Balance: ${balance:.2f} → ${new_balance:.2f}"
+        f"| Balance: ${new_balance:.2f}"
     )
     return new_balance
 
@@ -535,9 +537,7 @@ def _close_paper_trade(
     lev: int = 1,
 ):
     """Tutup paper trade, update balance, kirim notifikasi Telegram."""
-    balance     = get_paper_balance()
-    new_balance = balance + pnl
-    update_paper_balance(new_balance)
+    new_balance = add_paper_balance(pnl)   # atomic increment (fix #1B)
     update_active_trade(trade_id, {"status": "CLOSED", "pnl": pnl})
 
     is_win   = pnl >= 0
@@ -549,7 +549,7 @@ def _close_paper_trade(
     price_pct   = _pct_price(entry, exit_price)
     margin      = _calc_margin(entry, qty, lev) if qty > 0 else 0.0
     roi_margin  = _roi_on_margin(pnl, margin) if margin > 0 else ""
-    roi_balance = _roi_on_balance(pnl, balance)
+    roi_balance = _roi_on_balance(pnl, new_balance)
 
     logger.info(
         f"{emoji} [PAPER] {symbol} CLOSED ({reason}) | "

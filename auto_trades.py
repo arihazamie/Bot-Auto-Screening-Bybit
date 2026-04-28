@@ -11,7 +11,7 @@ import time
 import schedule
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime
+from datetime import datetime, timezone
 from pybit.unified_trading import WebSocket
 
 from modules.config_loader import CONFIG
@@ -25,9 +25,11 @@ from modules.database import (
     count_open_active_trades,
     get_waiting_signals,
     mark_signal_ingested,
+    try_claim_signal,
     get_closed_trades_last_24h,
     get_closed_trades_today,
     get_trades_today,
+    get_active_trades_today,
     get_paper_balance,
     save_daily_report,
 )
@@ -207,9 +209,13 @@ def on_position_update(message):
 # ══════════════════════════════════════════════════════════
 
 def _daily_entry_limit_reached() -> bool:
-    """Return True jika target/loss/jumlah trade harian sudah membatasi entry baru."""
+    """Return True jika target/loss/jumlah trade harian sudah membatasi entry baru.
+
+    Fix #4: hanya menghitung trade yang benar-benar terisi atau masih hidup.
+    PENDING expire (CANCELLED) tidak konsumsi slot harian.
+    """
     try:
-        trades_today = get_trades_today()
+        trades_today = get_active_trades_today()
         if MAX_DAILY_TRADES and len(trades_today) >= MAX_DAILY_TRADES:
             logger.warning(
                 f"🛑 [{MODE}] Max daily trades tercapai — "
@@ -270,7 +276,7 @@ def ingest_signals():
         return
 
     open_count = count_open_active_trades()
-    daily_count = len(get_trades_today())
+    daily_count = len(get_active_trades_today())   # fix #4
     for sig in get_waiting_signals():
         if open_count >= MAX_POSITIONS:
             break
@@ -294,6 +300,12 @@ def ingest_signals():
             mark_signal_ingested(sig['id'])
             continue
 
+        # Fix #1B: claim sebelum insert (atomic) supaya signal yang sama
+        # tidak menghasilkan dua active_trade kalau ada race.
+        if not try_claim_signal(sig['id']):
+            logger.debug(f"[{sym}] signal {sig['id']} sudah di-claim worker lain, skip")
+            continue
+
         trade_id = insert_active_trade({
             "signal_id": sig['id'],
             "symbol": sym,
@@ -305,7 +317,7 @@ def ingest_signals():
             "leverage": final_lev,
             "mode": MODE,
         })
-        mark_signal_ingested(sig['id'])
+        # try_claim_signal di atas sudah set ingested=1 secara atomic.
         open_count += 1
         daily_count += 1
         logger.info(f"📥 Signal ingested: {sym} {side} | ${position_value:.2f} | {MODE}")
@@ -452,12 +464,12 @@ def daily_report():
         "win_rate": round((wins / total) * 100, 2) if total else 0,
         "best_trade": max(pnls),
         "worst_trade": min(pnls),
-        "generated_at": str(datetime.now()),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     if not AUTO_TRADE:
         report["paper_balance"] = get_paper_balance()
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     save_daily_report(date_str, report)
 
     msg = (
