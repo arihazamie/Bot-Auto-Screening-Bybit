@@ -420,7 +420,15 @@ def _poll_loop():
             data = resp.json()
 
             if not data.get('ok'):
-                logger.warning(f"[TelegramCmd] getUpdates error: {data.get('description')}")
+                desc = data.get('description', '')
+                # 401 Unauthorized / 404 Not Found = token invalid → don't loop forever
+                if resp.status_code in (401, 404):
+                    logger.error(
+                        f"[TelegramCmd] Token revoked / invalid (status={resp.status_code}, "
+                        f"desc={desc!r}). Polling loop dihentikan."
+                    )
+                    return
+                logger.warning(f"[TelegramCmd] getUpdates error: {desc}")
                 time.sleep(5)
                 continue
 
@@ -444,6 +452,40 @@ def _poll_loop():
 # PUBLIC ENTRY POINT
 # ──────────────────────────────────────────────────────────────
 
+def _verify_token() -> bool:
+    """
+    Pre-flight check: verify the bot token is valid via getMe before we
+    spawn the polling thread. Telegram returns 404 + {"ok": false,
+    "description": "Not Found"} when the token is malformed/revoked.
+    Without this, _poll_loop silently logs a warning every 5s forever.
+    Returns True if token is valid; False otherwise.
+    """
+    try:
+        resp = requests.get(f"{_BASE}/getMe", timeout=10)
+        data = resp.json()
+        if resp.status_code == 200 and data.get("ok"):
+            bot = data.get("result", {})
+            logger.info(
+                f"[TelegramCmd] Token OK — bot @{bot.get('username', '?')} "
+                f"(id={bot.get('id')})"
+            )
+            return True
+        logger.error(
+            f"[TelegramCmd] Token INVALID — getMe returned "
+            f"status={resp.status_code} ok={data.get('ok')} "
+            f"description={data.get('description')!r}. "
+            f"Periksa api.telegram_bot_token di config.json."
+        )
+        return False
+    except Exception as e:
+        # Network error — don't fail startup but warn loudly
+        logger.warning(
+            f"[TelegramCmd] getMe pre-flight network error: {type(e).__name__}: {e}. "
+            f"Listener akan dimulai dan retry secara normal."
+        )
+        return True
+
+
 def start_command_listener():
     """
     Jalankan command listener sebagai daemon thread.
@@ -451,6 +493,13 @@ def start_command_listener():
     """
     if not _ENABLED:
         logger.warning("[TelegramCmd] Telegram tidak dikonfigurasi — command listener tidak dijalankan")
+        return None
+
+    if not _verify_token():
+        logger.error(
+            "[TelegramCmd] Token gagal diverifikasi — listener tidak dijalankan. "
+            "Bot tetap berjalan tetapi command Telegram (/status, /pause, dll) tidak aktif."
+        )
         return None
 
     t = threading.Thread(
