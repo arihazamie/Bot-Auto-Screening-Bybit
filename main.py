@@ -29,6 +29,7 @@ from modules.database import (
     save_signal_to_db,
     get_closed_trades_today,
     get_trades_today,
+    get_active_trades_today,
     get_paper_balance,
     purge_old_data,
     get_candle_confirm_state,
@@ -46,7 +47,8 @@ from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_in
 from modules.paper_runner import start_paper_runner
 from modules.telegram_commands import start_command_listener, is_paused
 from modules.telegram_bot import send_alert, update_status_dashboard, send_scan_completion
-from modules.paper_runner import run_paper_update
+# Note: run_paper_update tidak lagi dijadwal terpisah — daemon paper_runner
+# yang menangani semua siklus. Import dihapus untuk menghindari kebingungan.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging setup — semua module pakai logger ini
@@ -1121,7 +1123,8 @@ def _account_balance_for_daily_guard() -> float:
 
 
 def daily_entry_limit_status() -> tuple[bool, str, int]:
-    trades_today = get_trades_today()
+    # Fix #4: hanya hitung trade yang benar-benar dibuka (bukan PENDING expire / FAILED)
+    trades_today = get_active_trades_today()
     remaining = max(0, int(MAX_DAILY_TRADES or 0) - len(trades_today)) if MAX_DAILY_TRADES else 999999
     if MAX_DAILY_TRADES and remaining <= 0:
         return True, f"max daily trades {len(trades_today)}/{MAX_DAILY_TRADES}", 0
@@ -1363,20 +1366,83 @@ if __name__ == "__main__":
     # ── Mulai scan pertama ───────────────────────────────────────
     scan()
 
-    # ── Schedule ─────────────────────────────────────────────────
-    schedule.every(15).minutes.do(scan)
-    schedule.every(1).minutes.do(run_paper_update)
-    schedule.every().day.at("07:00").do(refresh_daily_watchlist)
-    # FIX #01: Purge data lama setiap hari jam 03:00 — cegah disk full
-    schedule.every().day.at("03:00").do(purge_old_data)
+    # ── Schedule (utility tasks only; scan dijalankan candle-aligned di loop) ──
+    # Catatan ops-hardening-2:
+    #   • schedule.every(15).minutes.do(scan)           → DIHAPUS, diganti
+    #     dengan candle-aligned wait di loop bawah.
+    #   • schedule.every(1).minutes.do(run_paper_update) → DIHAPUS karena
+    #     start_paper_runner() sudah jalankan ingest/execute/monitor sebagai
+    #     daemon. Dua-duanya jalan = race condition (fix #1A).
+    # Fix #2: jadwalkan tugas harian di UTC (sebelumnya local time bikin
+    # report jalan offset 7 jam di Indonesia).
+    schedule.every().day.at("07:00", "UTC").do(refresh_daily_watchlist)
+    # FIX #01: Purge data lama setiap hari jam 03:00 UTC — cegah disk full
+    schedule.every().day.at("03:00", "UTC").do(purge_old_data)
     # FIX #03: Heartbeat ke Telegram tiap jam — operational awareness
     schedule.every(1).hours.do(send_heartbeat)
 
+    # ─── Candle-aligned scan scheduler ────────────────────────────────────
+    # Tujuan: scan dipicu tepat setelah candle ENTRY_TF close, supaya
+    # OHLCV yang dibaca selalu mengandung candle terbaru yang sudah final.
+    # Contoh ENTRY_TF=15m: kalau bot start jam 10:17 → scan berikut pukul
+    # 10:30:05, lalu 10:45:05, 11:00:05, dst (5s buffer biar exchange
+    # sempat commit candle).
+    _TF_SECONDS = {
+        "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+        "1h": 3600, "2h": 7200, "4h": 14400,
+    }
+    candle_sec = _TF_SECONDS.get(ENTRY_TF, 900)
+    boundary_buffer = float(CONFIG["system"].get("scan_post_close_buffer_sec", 5.0))
+
+    def _next_boundary_epoch(after_epoch: float) -> float:
+        """Epoch boundary candle berikutnya setelah `after_epoch`, plus buffer.
+
+        Contoh ENTRY_TF=15m, buffer=5s:
+          after=10:17:00 → return 10:30:05  (scan candle 10:15-10:30)
+          after=10:30:04 → return 10:30:05  (scan candle yang baru close)
+          after=10:30:05 → return 10:45:05  (sudah lewat, ke candle berikut)
+        """
+        # Candle index saat ini berdasarkan pembagian epoch.
+        # Epoch 0 = 1970-01-01 00:00 UTC, kelipatan candle_sec = candle close.
+        cur_idx = int(after_epoch // candle_sec)
+        target = (cur_idx + 1) * candle_sec + boundary_buffer
+        # Kalau kita masih sebelum boundary current_idx + buffer, fire di sana
+        # (karena candle current_idx baru saja close).
+        within_buffer = cur_idx * candle_sec + boundary_buffer
+        if after_epoch < within_buffer:
+            return within_buffer
+        return target
+
     print("\n🚀 Bot Started.")
-    print(f"🕖 Watchlist refresh otomatis setiap hari jam 07:00")
-    print(f"🧹 DB purge otomatis setiap hari jam 03:00 (cegah disk full)")
+    print(f"🕖 Watchlist refresh otomatis setiap hari jam 07:00 UTC")
+    print(f"🧹 DB purge otomatis setiap hari jam 03:00 UTC (cegah disk full)")
     print(f"💗 Heartbeat Telegram otomatis setiap 1 jam")
+    print(f"📐 Scan candle-aligned: setiap candle {ENTRY_TF} close + {boundary_buffer:.0f}s buffer")
     print(f"💡 Tip: set \"debug\": true di config.json untuk verbose output\n")
+    next_scan_at = _next_boundary_epoch(time.time())
+    last_scan_idx = -1
+    logger.info(
+        f"📐 Next candle-aligned scan at "
+        f"{datetime.fromtimestamp(next_scan_at, tz=timezone.utc).strftime('%H:%M:%S')} UTC"
+    )
     while True:
         schedule.run_pending()
+
+        if time.time() >= next_scan_at:
+            # Catat candle index yang baru kita layani — boundary berikut
+            # WAJIB > index ini supaya scan tidak diulang dalam buffer window.
+            last_scan_idx = int(next_scan_at // candle_sec)
+            try:
+                scan()
+            except Exception as e:
+                logger.error(f"Scheduled scan error: {type(e).__name__}: {e}", exc_info=True)
+
+            # Cari boundary berikut yang index-nya > last_scan_idx.
+            candidate = _next_boundary_epoch(time.time())
+            if int(candidate // candle_sec) <= last_scan_idx:
+                candidate = (last_scan_idx + 1) * candle_sec + boundary_buffer
+            next_scan_at = candidate
+            tnext = datetime.fromtimestamp(next_scan_at, tz=timezone.utc).strftime("%H:%M:%S")
+            logger.info(f"📐 Next candle-aligned scan at {tnext} UTC")
+
         time.sleep(1)
