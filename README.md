@@ -29,7 +29,7 @@ A Python trading bot that automatically scans Bybit USDT-Perpetual futures, gene
 
 ## What you get
 
-- **Auto screening every 15 minutes**, candle-aligned. If you start the bot at 10:17, the first scan runs at 10:30:05 (5 seconds after the candle closes), then 10:45:05, 11:00:05, and so on.
+- **Auto screening every 15 minutes**, candle-aligned. The first scan runs immediately on startup, reading whatever candles are already closed. After that, every scan fires right after the next candle closes. Example: start the bot at 10:17 → first scan happens at 10:17 (uses the 15m candle that closed at 10:15 and the 1h candle that closed at 10:00), then 10:30:05, 10:45:05, 11:00:05 (this one also picks up the fresh 1h candle), and so on.
 - **Multi-layer strategy**: trend filter, Smart Money Concepts, chart patterns, derivatives (funding/CVD), volume + volatility regime classifier, and a separate range-trading module.
 - **Paper trading simulator** with realistic slippage and spread, so PnL numbers reflect what real trading would feel like.
 - **Telegram alerts**: signal, partial fills, TP/SL hits, trade closed, daily report at 07:00 your local time.
@@ -252,7 +252,7 @@ Send these to your bot in Telegram. They work whether the bot is in paper or rea
 
 ## How the bot decides to trade
 
-Every 15 minutes (candle-aligned), the bot:
+On startup the bot scans once immediately (using the most recent already-closed candles), then keeps scanning right after every 15m candle close. On each scan, the bot:
 
 1. **Picks the watchlist**: top 100 USDT-perp pairs by 24h volume, refreshed daily.
 2. **Filters by regime**: classifies each symbol as `TREND_BULL`, `TREND_BEAR`, `RANGE`, `SQUEEZE`, or `ANOMALY`. Anomalies are skipped entirely.
