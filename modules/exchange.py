@@ -296,6 +296,17 @@ class BybitClient:
         "12h": 43200, "1d":  86400, "1w":  604800,
     }
 
+    # Offset (detik) untuk menggeser epoch sebelum di-floor ke periode candle.
+    # Diperlukan saat boundary candle exchange tidak sejajar dengan kelipatan
+    # epoch Unix (1970-01-01 00:00 UTC = Kamis).
+    #   • 1w: Bybit close weekly candle hari SENIN 00:00 UTC. Epoch jatuh di
+    #     Kamis → boundary naive jatuh di Kamis. Geser +4 hari (4×86400 =
+    #     345600s) supaya boundary jatuh di Senin.
+    # TF lain (1m–1d) sudah otomatis sejajar dengan epoch UTC.
+    _TF_OFFSET: dict[str, int] = {
+        "1w": 345600,   # 4 hari = Kamis → Senin
+    }
+
     def _is_cache_fresh(self, timeframe: str, fetched_at: float, now: float) -> bool:
         """
         Cache fresh ⇔ fetched_at dan now masih di periode candle yang sama.
@@ -309,10 +320,19 @@ class BybitClient:
         Hasil: scan tepat di boundary (11:00:05) selalu re-fetch, tidak
         lagi terjebak TTL stale 45 menit lama.
 
+        Untuk TF dengan boundary tidak sejajar Unix epoch (mis. 1w yang
+        close Senin 00:00 UTC, sedangkan epoch = Kamis), terapkan offset
+        dari _TF_OFFSET supaya `int((t - offset) // candle_sec)` benar-
+        benar mencerminkan periode candle exchange.
+
         Unknown timeframe → fallback ke 15m supaya tidak cache forever.
         """
         candle_sec = self._TF_SECONDS.get(timeframe, 900)
-        return int(fetched_at // candle_sec) == int(now // candle_sec)
+        offset     = self._TF_OFFSET.get(timeframe, 0)
+        return (
+            int((fetched_at - offset) // candle_sec)
+            == int((now - offset) // candle_sec)
+        )
 
     # ─────────────────────────────────────────────
     # fetch_ohlcv
