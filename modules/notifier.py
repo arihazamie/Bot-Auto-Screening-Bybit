@@ -1,11 +1,17 @@
 """
 Notifier — sends alerts via Telegram.
 Falls back to log-only if token/chat_id not configured.
+
+Fix #5 (ops-hardening-2): semua HTTP request ke Telegram dirutekan via
+`telegram_bot._tg()` agar berbagi rate-limit (429) handler + retry yang
+sama dengan signal alert. Sebelumnya `notifier.send()` cuma `requests.post`
+tanpa cek 429 — partial-fill / TP-hit notification silent-drop saat
+Telegram throttle.
 """
 
 import logging
-import requests
 from modules.config_loader import CONFIG
+from modules.telegram_bot import _tg, normalize_chat_id
 
 logger = logging.getLogger("Notifier")
 
@@ -14,39 +20,49 @@ _CHAT_ID = CONFIG['api'].get('telegram_chat_id', '')
 _ENABLED = bool(_TOKEN and _CHAT_ID and 'YOUR_' not in _TOKEN)
 
 
+def _post(payload: dict):
+    """Wrap _tg() so notifier failures degrade ke log, bukan crash caller."""
+    try:
+        data = _tg("sendMessage", _TOKEN, json=payload)
+        if data is None:
+            logger.warning("[Notifier] sendMessage returned None (network/timeout)")
+        elif not data.get("ok", False):
+            logger.warning(f"[Notifier] Telegram error: {data}")
+    except Exception as e:
+        logger.warning(f"Telegram send failed: {e}")
+
+
 def send(message: str):
     """Send a Telegram message (or just log if not configured)."""
     if not _ENABLED:
         logger.info(f"[NOTIFY] {message}")
         return
-    try:
-        url = f"https://api.telegram.org/bot{_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": _CHAT_ID, "text": message, "parse_mode": "HTML"}, timeout=10)
-    except Exception as e:
-        logger.warning(f"Telegram send failed: {e}")
+    _post({
+        "chat_id":    normalize_chat_id(_CHAT_ID),
+        "text":       message,
+        "parse_mode": "HTML",
+    })
 
 
 def send_reply(message: str, reply_to_message_id: int = None):
     """
-    Send a new Telegram message, replying to a specific message if reply_to_message_id is given.
-    This creates a proper threaded reply under the original signal message.
+    Send a new Telegram message, replying to a specific message if
+    reply_to_message_id is given. This creates a proper threaded reply
+    under the original signal message.
     """
     if not _ENABLED:
         logger.info(f"[NOTIFY-REPLY] {message}")
         return
-    try:
-        url     = f"https://api.telegram.org/bot{_TOKEN}/sendMessage"
-        payload = {
-            "chat_id":    _CHAT_ID,
-            "text":       message,
-            "parse_mode": "HTML",
-        }
-        if reply_to_message_id:
-            payload["reply_to_message_id"]         = int(reply_to_message_id)
-            payload["allow_sending_without_reply"] = True   # still sends even if original deleted
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        logger.warning(f"Telegram send_reply failed: {e}")
+
+    payload = {
+        "chat_id":    normalize_chat_id(_CHAT_ID),
+        "text":       message,
+        "parse_mode": "HTML",
+    }
+    if reply_to_message_id:
+        payload["reply_to_message_id"]         = int(reply_to_message_id)
+        payload["allow_sending_without_reply"] = True   # still sends even if original deleted
+    _post(payload)
 
 
 def signal_alert(symbol: str, side: str, entry: float, sl: float, tp1: float, tp2: float, tp3: float,
