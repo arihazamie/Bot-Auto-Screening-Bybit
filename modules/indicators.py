@@ -49,6 +49,10 @@ def wilder_atr_pct(df: pd.DataFrame, length: int = 14) -> float:
         return 0.0
     atr = wilder_atr(df, length=length)
     last_close = float(df["close"].iloc[-1]) if len(df) else 0.0
-    if last_close <= 0 or atr <= 0:
+    # NaN-aware: float('nan') <= 0 evaluates to False, so without the
+    # finite check a NaN close would yield atr / NaN = NaN instead of
+    # the documented 0.0 fallback. Mirrors the np.isfinite() guard in
+    # wilder_atr above.
+    if not np.isfinite(last_close) or last_close <= 0 or atr <= 0:
         return 0.0
     return atr / last_close
