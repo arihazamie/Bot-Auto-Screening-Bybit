@@ -1,425 +1,416 @@
-# 🤖 Bot Auto Screening Bybit
+# Bot Auto Screening Bybit
 
-Bot trading otomatis berbasis Python untuk Bybit Futures (USDT Perpetual). Melakukan screening sinyal multi-timeframe, paper trading simulasi, dan notifikasi real-time via Telegram — tanpa perlu modal nyata untuk testing.
+A Python trading bot that automatically scans Bybit USDT-Perpetual futures, generates signals from a multi-layer strategy, and either **simulates trades** (paper mode, default) or **places real orders** (auto-trade mode). Every signal, fill, take-profit hit, and daily summary is delivered to your Telegram chat.
 
----
-
-## ✨ Fitur Utama
-
-| Fitur                        | Keterangan                                                                              |
-| ---------------------------- | --------------------------------------------------------------------------------------- |
-| **Multi-Timeframe Analysis** | Konfluensi entry (15m) + trend (1h) via Supertrend & EMA                                |
-| **Auto Screening**           | Scan paralel seluruh watchlist setiap 15 menit                                          |
-| **Active Hour Filter**       | Scan hanya aktif pada jam 06:00–22:00 UTC (sesi London + New York), dapat dikonfigurasi |
-| **Smart Money Concepts**     | BOS, CHoCH, Fresh Order Block, FVG, Liquidity Sweep                                     |
-| **Chart Pattern Detection**  | Double Top/Bottom, Bull/Bear Flag, Triangle, Rectangle (dengan volume gate)             |
-| **Quant Metrics**            | Zeta Field (8 sub-indicator), RVOL, Z-Score volume, OBI dari real order book            |
-| **Derivatives Analysis**     | Funding rate filter, Basis, CVD Divergence                                              |
-| **Paper Trading**            | Simulasi fill, TP/SL bertingkat, trailing SL, PnL harian — tanpa modal nyata            |
-| **Notifikasi Telegram**      | Alert sinyal, partial fill, TP/SL hit, laporan 24 jam                                   |
-| **Telegram Commands**        | `/status`, `/trades`, `/balance`, `/report`, `/pause`, `/resume`                        |
-| **Watchlist Dinamis**        | Auto-refresh top-N pair berdasarkan volume setiap hari                                  |
-| **Thread Safety**            | Atomic JSON write, `threading.Event` untuk pause flag, singleton lock exchange          |
+> **Heads up — read this before running anything.**
+> - Crypto trading is risky. This bot can lose money, especially in real-trade mode.
+> - The default config runs in **paper mode** (no real orders). Run it for at least 1–2 weeks before even thinking about flipping `auto_trade: true`.
+> - This is not financial advice. You are responsible for everything the bot does with your account.
 
 ---
 
-## 🗂️ Struktur Project
+## Table of contents
 
-```
-project/
-├── main.py                      # Entry point — scheduler & scan loop utama
-├── auto_trades.py               # Logika real order via WebSocket (auto_trade=true)
-├── config.example.json          # Template konfigurasi
-├── requirements.txt
-└── modules/
-    ├── config_loader.py         # Load & validasi config.json
-    ├── exchange.py              # BybitClient (ccxt) — retry, leverage cache, health check
-    ├── database.py              # JSON storage: sinyal, trade aktif, balance, state
-    ├── watchlist.py             # Auto-refresh watchlist pair berdasarkan volume
-    ├── technicals.py            # EMA 13/21, Stoch RSI, MACD, divergence
-    ├── smc.py                   # Smart Money Concepts (lihat detail di bawah)
-    ├── patterns.py              # Chart pattern detection + volume & pole validation
-    ├── quant.py                 # Zeta Field, RVOL, Z-Score, OBI dari order book
-    ├── derivatives.py           # Funding rate, Basis, CVD Divergence
-    ├── paper_trader.py          # Simulasi fill, partial TP/SL, PnL calculation
-    ├── paper_runner.py          # Runner loop & scheduler paper trade (daemon thread)
-    ├── telegram_bot.py          # Kirim alert, update dashboard, scan completion
-    ├── telegram_commands.py     # Handler command Telegram (long polling)
-    └── notifier.py              # Abstraksi send_reply (reply ke pesan asli)
-```
+1. [What you get](#what-you-get)
+2. [Quick start (5 minutes)](#quick-start-5-minutes)
+3. [Step-by-step setup](#step-by-step-setup)
+4. [Running the bot](#running-the-bot)
+5. [Telegram commands](#telegram-commands)
+6. [Paper mode vs auto-trade mode](#paper-mode-vs-auto-trade-mode)
+7. [How the bot decides to trade](#how-the-bot-decides-to-trade)
+8. [Where the data lives](#where-the-data-lives)
+9. [Common config knobs](#common-config-knobs)
+10. [Troubleshooting](#troubleshooting)
+11. [Updating the bot](#updating-the-bot)
+12. [Project layout](#project-layout)
+13. [Disclaimer](#disclaimer)
 
 ---
 
-## ⚙️ Konfigurasi Lengkap
+## What you get
 
-Salin template lalu isi dengan credential milik kamu:
+- **Auto screening every 15 minutes**, candle-aligned. If you start the bot at 10:17, the first scan runs at 10:30:05 (5 seconds after the candle closes), then 10:45:05, 11:00:05, and so on.
+- **Multi-layer strategy**: trend filter, Smart Money Concepts, chart patterns, derivatives (funding/CVD), volume + volatility regime classifier, and a separate range-trading module.
+- **Paper trading simulator** with realistic slippage and spread, so PnL numbers reflect what real trading would feel like.
+- **Telegram alerts**: signal, partial fills, TP/SL hits, trade closed, daily report at 07:00 your local time.
+- **Telegram remote control**: `/status`, `/pause`, `/resume`, `/balance`, `/trades`, `/report`.
+- **Daily safety limits**: max trades per day, daily profit target, daily loss cap, weekend skip.
+
+---
+
+## Quick start (5 minutes)
+
+Use this if you already have Python 3.10+ and a Telegram account. Otherwise jump to the [step-by-step setup](#step-by-step-setup).
 
 ```bash
-cp config.example.json config.json
-```
-
-### Referensi Semua Parameter
-
-| Key                            | Default               | Keterangan                                            |
-| ------------------------------ | --------------------- | ----------------------------------------------------- |
-| `auto_trade`                   | `false`               | `true` = real order ke Bybit, `false` = paper trading |
-| `api.bybit_key`                | —                     | API Key Bybit (read-only cukup untuk paper mode)      |
-| `api.bybit_secret`             | —                     | API Secret Bybit                                      |
-| `api.telegram_bot_token`       | —                     | Token bot dari @BotFather                             |
-| `api.telegram_chat_id`         | —                     | Chat ID tujuan notifikasi                             |
-| `system.max_threads`           | `20`                  | Thread paralel saat scan watchlist                    |
-| `system.entry_timeframe`       | `"15m"`               | Timeframe analisis sinyal entry                       |
-| `system.trend_timeframe`       | `"1h"`                | Timeframe filter trend (Supertrend)                   |
-| `system.min_candles_analysis`  | `150`                 | Minimum candle OHLCV untuk analisis                   |
-| `system.watchlist_top_n`       | `100`                 | Jumlah pair teratas yang masuk watchlist              |
-| `system.active_hours_utc`      | `[6, 22]`             | Window jam aktif scan UTC `[start, end)`              |
-| `risk.use_max_leverage`        | `true`                | `true` = pakai max leverage per coin dari Bybit (BTC=100x, SOL=50x, dll); `false` = pakai `target_leverage` flat |
-| `risk.target_leverage`         | `25`                  | Leverage target saat `use_max_leverage=false`         |
-| `risk.max_leverage_cap`        | `100`                 | Hard cap leverage — paper & real mode pakai nilai sama |
-| `risk.risk_percent`            | `0.01`                | Risiko per trade: 1% dari balance                     |
-| `risk.max_positions`           | `20`                  | Maks posisi terbuka bersamaan                         |
-| `risk.max_daily_loss_pct`      | `0.05`                | Stop trading jika loss harian > 5%                    |
-| `risk.pending_expire_hours`    | `6`                   | Auto-cancel pending order setelah N jam               |
-| `risk.tp_split`                | `[0.5, 0.25, 0.25]`   | Distribusi close di TP1/TP2/TP3 (harus sum = 1.0)     |
-| `risk.paper_balance`           | `100.0`               | Modal awal paper trading (USD)                        |
-| `setup.fib_entry_start`        | `0.5`                 | Entry mulai di Fibonacci 50%                          |
-| `setup.fib_entry_end`          | `0.618`               | Entry berakhir di Fibonacci 61.8%                     |
-| `setup.fib_sl`                 | `0.27`                | SL di luar swing ±27% range                           |
-| `setup.fib_tp_1/2/3`           | `1.0 / 1.618 / 2.618` | TP di ekstensi Fibonacci                              |
-| `strategy.min_tech_score`      | `3`                   | Skor teknikal minimum                                 |
-| `strategy.min_smc_score`       | `2`                   | Skor SMC minimum                                      |
-| `strategy.min_quant_score`     | `3`                   | Skor kuantitatif minimum                              |
-| `strategy.min_deriv_score`     | `2`                   | Skor derivatives minimum                              |
-| `strategy.max_entry_drift_pct` | `0.03`                | Maks jarak entry dari harga terkini (3%)              |
-| `strategy.risk_reward_min`     | `2.5`                 | Minimum R:R ke TP3                                    |
-| `indicators.min_rvol`          | `1.5`                 | Relative Volume minimum (1.5x rata-rata 20 candle)    |
-| `patterns.tolerance`           | `0.015`               | Toleransi harga alignment check (1.5%)                |
-| `patterns.<name>`              | `true`                | Enable/disable deteksi pattern tertentu               |
-
-### Anomaly Hardening (fix A–L) — parameter baru
-
-| Key                                          | Default     | Fix | Catatan                                                      |
-| -------------------------------------------- | ----------- | --- | ------------------------------------------------------------ |
-| `system.confirm_timeframe`                   | `"5m"`      | L   | Timeframe LTF micro-confirm sebelum eksekusi                 |
-| `system.skip_weekends`                       | `true`      | J   | Skip Sabtu/Minggu (low-liq + funding artefak)                |
-| `system.skip_hours_utc`                      | `[]`        | J   | List jam UTC tambahan untuk di-skip                          |
-| `patterns.volume_multiplier`                 | `1.8`       | A   | Threshold volume gate breakout (vs 1.2 lama)                 |
-| `patterns.min_pattern_adx`                   | `20`        | A   | ADX(14) minimum untuk triangle/flag/rectangle                |
-| `patterns.min_double_gap_bars`               | `5`         | A   | Jarak minimum 2 puncak/lembah double pattern                 |
-| `patterns.min_double_reject_atr`             | `0.4`       | A   | Reject min × ATR setelah touch kedua                         |
-| `strategy.max_funding_long`                  | `0.0008`    | C   | Skala fraksi (Bybit native, bukan persen)                    |
-| `strategy.min_funding_short`                 | `-0.0008`   | C   | Skala fraksi                                                 |
-| `strategy.cool_funding_abs`                  | `0.0002`    | C   | Threshold "Cool Funding" bonus                               |
-| `strategy.bonus_funding_min`                 | `0.0003`    | C   | Funding edge bonus untuk side berlawanan                     |
-| `strategy.cvd_lookback`                      | `30`        | D   | Window divergence price↔CVD                                  |
-| `strategy.cvd_min_adx`                       | `20`        | D   | ADX(14) minimum agar divergence dianggap valid               |
-| `strategy.smc_min_displacement_body_pct`     | `0.006`     | B   | Body % minimum agar OB dianggap "displaced"                  |
-| `strategy.smc_bos_min_adx`                   | `18`        | B   | Suppress BOS/CHoCH bonus saat range chop                     |
-| `strategy.smc_sweep_base_tolerance`          | `0.002`     | B   | Sweep tolerance dasar (auto-naik ke ATR%)                    |
-| `strategy.smc_premdisc_window`               | `80`        | B   | Window pivot untuk premium/discount mapping                  |
-| `strategy.regime.trend_adx`                  | `22`        | E   | ADX threshold TREND_BULL/TREND_BEAR                          |
-| `strategy.regime.anomaly_atr_pct`            | `0.025`     | E   | ATR% threshold ANOMALY (skip scan)                           |
-| `strategy.regime.squeeze_bbw_pct`            | `0.20`      | E   | BBW percentile rank → SQUEEZE                                |
-| `strategy.regime.range_bbw_pct`              | `0.50`      | E   | BBW percentile rank → RANGE                                  |
-| `strategy.regime.lookback`                   | `120`       | E   | Window untuk rank BB-width                                   |
-| `strategy.range.enabled`                     | `true`      | K   | Aktifkan modul range_strategy                                |
-| `strategy.range.bb_length / bb_std`          | `20 / 2.0`  | K   | Bollinger params                                             |
-| `strategy.range.rsi_oversold / rsi_overbought` | `30 / 70` | K   | RSI threshold mean-revert                                    |
-| `strategy.range.squeeze_breakout_volume_mult` | `1.5`      | K   | Volume mult untuk squeeze-breakout signal                    |
-| `strategy.ltf_confirmation.enabled`          | `true`     | L   | Aktifkan LTF (5m) confirmation                               |
-| `strategy.ltf_confirmation.lookback_bars`    | `3`        | L   | Bar yang dicek di LTF                                        |
-| `strategy.correlation_threshold`             | `0.7`      | I   | Z-score correlation threshold (vs Pearson 0.85 lama)         |
-| `strategy.correlation_use_zscore`            | `true`     | I   | Gunakan rolling z-score (resistant ke outlier)               |
-| `strategy.correlation_sector_max`            | `1`        | I   | Max posisi aktif per sektor                                  |
-| `risk.paper_slippage_bps`                    | `5`        | G   | Slippage simulasi paper (bps)                                |
-| `risk.paper_spread_bps`                      | `2`        | G   | Spread simulasi paper (bps)                                  |
-| `risk.paper_max_spread_bps`                  | `50`       | G   | Reject fill paper jika spread > threshold                    |
-
-#### Routing regime-aware (Fix E + K)
-
-`scan()` sekarang mengklasifikasi tiap simbol ke salah satu dari 5 regime:
-
-| Regime        | Aksi                                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------------- |
-| `TREND_BULL`  | Hanya signal **Long** dari chart pattern path standar.                                            |
-| `TREND_BEAR`  | Hanya signal **Short** dari chart pattern path standar.                                           |
-| `RANGE`       | Coba `find_range_signal()` dulu (BB revert / failed-breakout). Fallback ke pattern (jarang lolos). |
-| `SQUEEZE`     | Sama dengan RANGE, tetapi `squeeze_breakout_*` aktif jika volume eksplosif.                       |
-| `ANOMALY`     | **Skip scan**: ATR% mengindikasikan flash-event/black-swan; tidak ambil posisi baru.              |
-
----
-
-## 🚀 Instalasi & Menjalankan
-
-### Prasyarat
-
-- Python 3.10+
-- Akun Bybit dengan API key (read-only untuk paper mode)
-- Bot Telegram + Chat ID (buat via @BotFather, dapatkan chat ID via @userinfobot)
-
-### Langkah-langkah
-
-```bash
-# 1. Masuk ke direktori project
-cd Bot-Auto-Screening-Bybit-main
-
-# 2. Buat & aktifkan virtual environment
-python -m venv venv
-venv\Scripts\activate          # Windows
-source venv/bin/activate       # Linux / macOS
-
-# 3. Install dependencies
+# 1. Clone and install
+git clone https://github.com/arihazamie/Bot-Auto-Screening-Bybit.git
+cd Bot-Auto-Screening-Bybit
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 4. Salin & isi konfigurasi
+# 2. Configure
 cp config.example.json config.json
-# Edit config.json dengan text editor — isi semua field YOUR_...
+# → open config.json and fill in:
+#     api.telegram_bot_token
+#     api.telegram_chat_id
+#   (Bybit keys are optional for paper mode)
 
-# 5. Jalankan bot
+# 3. Run
 python main.py
+```
 
-# (Opsional) Mode verbose untuk debugging
-# Set "debug": true di config.json, lalu:
+You should see something like:
+
+```
+🤖 Bybit Screening Bot v8
+   Mode    : PAPER TRADE 📋 (signal + simulasi)
+   Debug   : OFF
+   Env     : PROD
+📐 Timeframes — Entry: 15m | Trend: 1h | Confirm: 5m
+📡 Bybit client ready
+📋 Watchlist loaded: 100 pairs (age: 0.0h ago)
+🚀 Bot Started.
+🕖 Watchlist refresh otomatis setiap hari jam 07:00 Asia/Jakarta
+📐 Scan candle-aligned: setiap candle 15m close + 5s buffer
+📐 Next candle-aligned scan at 03:45:05 UTC
+```
+
+If you see that, you're done. Leave it running and watch your Telegram for signals.
+
+---
+
+## Step-by-step setup
+
+### 1. Install Python and Git
+
+You need **Python 3.10 or newer** and **Git**.
+
+- macOS: `brew install python git`
+- Ubuntu/Debian: `sudo apt update && sudo apt install python3 python3-venv python3-pip git`
+- Windows: install from [python.org](https://www.python.org/downloads/) (check "Add Python to PATH") and [git-scm.com](https://git-scm.com/download/win)
+
+Verify:
+
+```bash
+python3 --version    # should print 3.10.x or higher
+git --version
+```
+
+### 2. Clone the repository and create a virtual environment
+
+```bash
+git clone https://github.com/arihazamie/Bot-Auto-Screening-Bybit.git
+cd Bot-Auto-Screening-Bybit
+
+python3 -m venv venv
+source venv/bin/activate           # Windows: venv\Scripts\activate
+
+pip install -r requirements.txt
+```
+
+A virtual environment keeps the bot's libraries isolated from your system Python.
+
+### 3. Create a Telegram bot and get your chat ID
+
+This is the only **mandatory** credential. Without it the bot will refuse to start.
+
+**Create the bot:**
+
+1. Open Telegram, search for `@BotFather`, send `/newbot`.
+2. Pick any name and a unique username ending in `bot` (e.g. `mybybit_bot`).
+3. BotFather replies with a token that looks like `123456789:ABCdefGHI...`. **Copy this** — it goes into `api.telegram_bot_token`.
+
+**Get your chat ID:**
+
+1. Open a chat with your new bot and send any message (e.g. `hi`).
+2. Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser (replace `<YOUR_TOKEN>`).
+3. Look for `"chat":{"id":12345678,...}`. That number is your chat ID — copy it into `api.telegram_chat_id`.
+
+> Want signals in a group? Add the bot to the group, send a message in the group, then re-check `getUpdates`. The group chat ID will be a negative number like `-1001234567890`.
+
+### 4. (Optional) Get a Bybit API key
+
+You only need this if you plan to enable real trading later (`auto_trade: true`). For paper mode, leave the placeholders.
+
+1. Sign up / log in at [bybit.com](https://www.bybit.com).
+2. Go to **API → Create New Key → System-generated**.
+3. Permissions you need:
+   - **Contract → Orders & Positions** (read + write)
+   - **Wallet → Account Transfer** is **NOT** needed
+4. **Important**: enable **IP whitelist** with your bot's static IP. If you don't have one, you can leave it open but it's much less safe.
+5. Copy the API key and secret into `api.bybit_key` and `api.bybit_secret`.
+
+> **Never share your API key, never commit it to Git.** The bot reads it from `config.json` which is `.gitignore`'d.
+
+### 5. Fill in `config.json`
+
+```bash
+cp config.example.json config.json
+```
+
+Open `config.json` and edit the fields under `api`:
+
+```json
+"api": {
+  "bybit_key":          "YOUR_BYBIT_API_KEY",
+  "bybit_secret":       "YOUR_BYBIT_API_SECRET",
+  "telegram_bot_token": "123456789:ABC...",
+  "telegram_chat_id":   "12345678"
+}
+```
+
+For paper mode you can leave `bybit_key` and `bybit_secret` as placeholders — the bot only uses public market data in paper mode.
+
+The other sections (`system`, `risk`, `strategy`) come pre-tuned. See [common config knobs](#common-config-knobs) below if you want to customize.
+
+### 6. (Optional) If you're in a region where Bybit is blocked
+
+You'll see `403 Forbidden` or DNS errors when the bot tries to fetch prices. Use a VPN with an exit node in a country where Bybit is accessible (e.g. Singapore, Japan, Germany), then start the bot.
+
+---
+
+## Running the bot
+
+Activate your virtual environment and run:
+
+```bash
+source venv/bin/activate
 python main.py
 ```
 
-Bot akan otomatis:
+**Stop it with `Ctrl+C`.** The bot exits cleanly and persists state in `data/bot.db`.
 
-1. Health check koneksi ke Bybit
-2. Fetch watchlist pertama kali (jika belum ada)
-3. Langsung mulai scan pertama
-4. Menjadwalkan: scan tiap 15 menit, paper update tiap 1 menit, refresh watchlist tiap hari jam 07:00 UTC
+### Run it 24/7
 
----
+Pick whichever you prefer:
 
-## 🔍 Pipeline Analisis (Per Pair)
+| Method | Best for |
+|---|---|
+| `nohup python main.py > /dev/null 2>&1 &` | Quick test on a Linux box you already have. |
+| `tmux` / `screen` | Easy to detach and reattach to view logs. |
+| `systemd` service | Servers — restart on crash, start on boot. |
+| Docker | Production-style deployment (no Dockerfile shipped yet, but easy to write). |
 
-Setiap pair dalam watchlist diproses melalui **13 filter berurutan**. Pair yang gagal di salah satu filter langsung di-skip dan alasannya dicatat untuk filter breakdown report.
+A minimal systemd unit:
 
-```
- 1. Duplicate check          → skip jika sinyal aktif untuk pair+TF ini sudah ada
- 2. Fetch ticker             → skip jika data tidak valid / settlement token (ST)
- 3. Symbol Trend (1h)        → Supertrend(10, 3.5): Bullish / Bearish / Sideways
- 4. Fetch OHLCV (15m)        → skip jika data < min_candles_analysis
- 5. Technicals               → hitung EMA 13/21, Stoch RSI, MACD, RVOL, Z-Score
- 6. Pattern Detection        → cari chart pattern (volume gate + pole validation)
- 7. MTF Alignment            → skip jika trend 1h berlawanan dengan arah sinyal
- 8. BTC Bias Filter          → skip jika BTC EMA 13/21 berlawanan dengan arah sinyal
- 9. SMC Analysis             → BOS, CHoCH, Fresh OB, FVG, Liquidity Sweep
-10. Quant Metrics            → Zeta Field (8 sub-indicator), OBI dari real order book
-11. Derivatives Check        → Funding Rate filter, Basis, CVD Divergence
-12. Divergence (Stoch RSI)   → deteksi bullish/bearish divergence pada price pivot
-13. Setup & R:R Check        → kalkulasi level Fibonacci + entry proximity (max 3% drift)
-    ✅ SIGNAL VALID → alert Telegram + simpan ke DB → paper_runner ingest
-```
+```ini
+# /etc/systemd/system/bybit-bot.service
+[Unit]
+Description=Bybit Screening Bot
+After=network.target
 
----
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/home/youruser/Bot-Auto-Screening-Bybit
+ExecStart=/home/youruser/Bot-Auto-Screening-Bybit/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
 
-## 📊 Smart Money Concepts (SMC)
-
-Diimplementasikan penuh di `modules/smc.py`:
-
-| Komponen              | Keterangan                                                 | Skor       |
-| --------------------- | ---------------------------------------------------------- | ---------- |
-| **Market Structure**  | Pivot HH/HL = Bullish, LH/LL = Bearish via `argrelextrema` | +1 atau +2 |
-| **BOS**               | Break of Structure — konfirmasi continuation               | +2         |
-| **CHoCH**             | Change of Character — early reversal warning               | +1         |
-| **Fresh Order Block** | OB belum ter-mitigasi (stale OB otomatis dibuang)          | +2         |
-| **Fair Value Gap**    | 3-candle imbalance yang belum terisi                       | +1         |
-| **Liquidity Sweep**   | Equal highs/lows di-grab lalu reversal                     | +2         |
-| **Contrarian BOS**    | BOS berlawanan dengan arah sinyal                          | -1         |
-
-**Hard reject (sinyal dibatalkan):**
-
-- Long ke zona Supply OB
-- Short ke zona Demand OB
-- Long di market structure LH atau LL
-- Short di market structure HL atau HH
-
----
-
-## 📈 Quant Metrics — Zeta Field
-
-`modules/quant.py` menghitung **Zeta Field Score** dari 8 sub-indicator yang dinormalisasi ke 0–100:
-
-| Sub-indicator | Formula                                       |
-| ------------- | --------------------------------------------- |
-| v_term        | `sigmoid(NATR_14)` — volatilitas normalized   |
-| f_term        | `(CMF_20 + 1) / 2` — money flow               |
-| c_term        | `sigmoid(CCI_20 / 100)` — commodity channel   |
-| b_term        | `1 - min(abs(basis) × 100, 1)` — basis spread |
-| s_term        | `RSI_14 / 100` — momentum                     |
-| a_term        | `sigmoid(ROC_9)` — rate of change             |
-| h_term        | `min(RVOL / 5, 1)` — relative volume cap      |
-| t_term        | `ADX_14 / 100` — trend strength               |
-
-Zeta > 70 atau < 30 memberikan bonus +1 pada quant score.
-
----
-
-## 📋 Mode Paper Trading
-
-Ketika `auto_trade = false`, bot berjalan dalam mode **paper trading** penuh:
-
-### Formula PnL (identik dengan exchange asli)
-
-```
-margin         = balance × risk_percent
-position_value = margin × leverage
-quantity       = position_value / entry_price        ← leverage sudah baked-in
-pnl (Long)     = (exit_price - entry) × quantity
-pnl (Short)    = (entry - exit_price) × quantity
-fee            = (entry × qty × 0.00055) + (exit × qty × 0.00055)
-                 ↑ Bybit taker fee 0.055% untuk open dan close
+[Install]
+WantedBy=multi-user.target
 ```
 
-**Contoh nyata:**
-
-```
-Balance=$100, Risk=1%, Leverage=50x, Entry=9.6084, SL=9.4868
-
-margin         = $100 × 1%     = $1.00
-position_value = $1 × 50       = $50.00
-quantity       = $50 / 9.6084  = 5.203 koin
-pnl (SL hit)   = (9.4868 - 9.6084) × 5.203 - fee = -$0.63
-```
-
-### Partial TP & Trailing SL
-
-| Event   | Tindakan                                    | SL Baru                       |
-| ------- | ------------------------------------------- | ----------------------------- |
-| TP1 hit | Jual 50% posisi, update balance             | → **Breakeven** (harga entry) |
-| TP2 hit | Jual 25% posisi, update balance             | → **harga TP1**               |
-| TP3 hit | Tutup sisa 25% posisi, tutup trade          | —                             |
-| SL hit  | Tutup semua sisa posisi di harga SL efektif | —                             |
-
-> Distribusi TP default `[0.5, 0.25, 0.25]` bisa diubah via `risk.tp_split`.
-
-### Cascade TP (Skip Detection)
-
-Jika harga loncat langsung ke TP2/TP3 tanpa menyentuh TP sebelumnya, bot memproses setiap level **secara berurutan** — TP1 dihitung di harga TP1, TP2 di harga TP2 — baru menutup posisi di level yang tersentuh.
-
-### PENDING Auto-Expire
-
-Order pending yang belum terisi dalam `pending_expire_hours` jam (default 6) otomatis di-cancel dan notifikasi dikirim ke Telegram.
+Then `sudo systemctl enable --now bybit-bot`.
 
 ---
 
-## 🎧 Telegram Commands
+## Telegram commands
 
-Bot mendengarkan command via long polling di daemon thread terpisah. Hanya `telegram_chat_id` yang dikonfigurasi yang bisa mengirim command.
+Send these to your bot in Telegram. They work whether the bot is in paper or real mode.
 
-| Command    | Keterangan                                                       |
-| ---------- | ---------------------------------------------------------------- |
-| `/start`   | Salam + daftar semua perintah                                    |
-| `/help`    | Daftar perintah                                                  |
-| `/status`  | Ringkasan: posisi aktif, pending, paper balance                  |
-| `/trades`  | Detail semua posisi aktif & pending (entry, TP/SL, PnL floating) |
-| `/balance` | Tampilkan paper balance saat ini                                 |
-| `/report`  | Laporan 24 jam: total trade, win rate, total PnL, best trade     |
-| `/pause`   | Pause scan cycle — scan dilewati sampai `/resume`                |
-| `/resume`  | Resume scan cycle                                                |
+| Command   | What it does                                          |
+|-----------|-------------------------------------------------------|
+| `/status` | Current mode, uptime, watchlist size, daily counters  |
+| `/balance`| Paper balance (paper mode) or Bybit USDT (real mode)  |
+| `/trades` | All currently open trades                             |
+| `/report` | Force-send today's daily report                       |
+| `/pause`  | Stop opening new trades (existing ones keep running)  |
+| `/resume` | Resume opening new trades                             |
 
----
-
-## 🛡️ Thread Safety
-
-| Komponen            | Mekanisme                                               | Keterangan                            |
-| ------------------- | ------------------------------------------------------- | ------------------------------------- |
-| **JSON file write** | `threading.Lock` + atomic `os.replace()` + `fsync`      | Tidak ada partial write / file korup  |
-| **Pause flag**      | `threading.Event` (`.set()` / `.clear()` / `.is_set()`) | Atomic tanpa lock tambahan            |
-| **Exchange client** | `threading.Lock` (`_client_lock`)                       | Singleton aman dari multi-thread scan |
-| **Leverage cache**  | `threading.Lock` + double-check locking                 | Cegah thundering herd saat cache miss |
+`/pause` is your panic button: it freezes new entries instantly without killing the bot.
 
 ---
 
-## 📝 Logging & Observabilitas
+## Paper mode vs auto-trade mode
 
-- **File log:** `data/bot.log` — `RotatingFileHandler` maks 5 MB, 3 backup otomatis
-- **Named logger:** setiap module punya logger sendiri (`Main`, `Exchange`, `SMC`, `Quant`, `Patterns`, `Derivatives`, `PaperTrader`, `TelegramBot`, `TelegramCmd`)
-- **Filter breakdown:** setiap scan mencetak distribusi rejection per filter ke console
-- **Debug mode:** set `"debug": true` di `config.json` untuk verbose output + traceback penuh
-- **Step tracking:** exception pada `analyze_ticker` mencatat step terakhir sebelum error
+| Feature                          | Paper (`auto_trade: false`) | Auto-trade (`auto_trade: true`) |
+|----------------------------------|-----------------------------|---------------------------------|
+| Real orders on Bybit             | No                          | **Yes — real money**            |
+| Bybit API key needed             | Optional                    | **Required**                    |
+| Slippage / spread simulated      | Yes (5 bps + 2 bps default) | Real exchange fills             |
+| TP/SL execution                  | Simulated against live price| Native Bybit limit orders       |
+| Telegram alerts                  | Yes                         | Yes                             |
+| Daily limits enforced            | Yes                         | Yes                             |
+| Bot lock-step with Bybit API     | No (read-only public data)  | Yes — full account access       |
 
-Contoh output filter breakdown:
-
-```
-📊 Filter Breakdown — 87 pairs diproses:
-   Tidak ada pattern                        52 (59.8%)  ██████████████████████████
-   MTF conflict (1h vs 15m)                 18 (20.7%)  █████████
-   RVOL rendah (< 1.5x)                      9 (10.3%)  ████
-   SMC fail                                  5 ( 5.7%)  ██
-   R:R rendah (< 2.5)                        2 ( 2.3%)  █
-```
+**Strong recommendation:** run paper mode for at least 7–14 calendar days (including a weekend) before flipping `auto_trade: true`. Compare the simulated PnL with what you'd expect — if paper mode loses money, real mode will lose more.
 
 ---
 
-## 🐛 Bug Fix Log
+## How the bot decides to trade
 
-| #   | Deskripsi                                                                                                                                   |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **ImportError `run_paper_update`** — fungsi dipindah ke `paper_runner.py`, import di `main.py` diperbarui                                   |
-| 2   | **PnL calculation salah** — qty sudah mengandung leverage, tidak perlu dikali leverage lagi                                                 |
-| 3   | **Windows UTF-8 crash** — stdout di-wrap UTF-8 agar emoji tidak error di encoding cp1252                                                    |
-| 4   | **Balance tidak update saat partial** — balance diperbarui realtime di setiap TP hit                                                        |
-| 5   | **Remaining qty salah di TP3/SL** — sisa posisi dihitung benar setelah partial terjual                                                      |
-| 6   | **JSON korup saat crash** — write kini atomic (temp file + fsync + os.replace)                                                              |
-| 7   | **`_paused` bool tidak thread-safe** — diganti `threading.Event` (.set/.clear/.is_set)                                                      |
-| 8   | **pytz tidak ada di requirements.txt** — ditambahkan `pytz>=2024.1`                                                                         |
-| 9   | **Scan aktif 24 jam termasuk jam sepi** — ditambahkan `is_active_hour()` dengan window `active_hours_utc` yang dapat dikonfigurasi          |
-| 10  | **OBI selalu 0** — `calculate_obi()` kini menggunakan real order book depth (top 10 level), bukan `ticker.bidVolume` yang selalu 0 di Bybit |
-| 11  | **`bare except:` di telegram_bot.py** — diganti `except Exception:` agar tidak menelan `KeyboardInterrupt`                                  |
-| 12  | **`auto_trades.py` bypass BybitClient** — kini routing semua order lewat wrapper `BybitClient` untuk retry & logging yang konsisten         |
-| 13  | **Stoch RSI kolom dinamis** — kolom K/D dideteksi by suffix bukan hardcode agar tidak crash di versi `pandas_ta` yang berbeda               |
+Every 15 minutes (candle-aligned), the bot:
+
+1. **Picks the watchlist**: top 100 USDT-perp pairs by 24h volume, refreshed daily.
+2. **Filters by regime**: classifies each symbol as `TREND_BULL`, `TREND_BEAR`, `RANGE`, `SQUEEZE`, or `ANOMALY`. Anomalies are skipped entirely.
+3. **Runs the strategy stack**:
+   - Multi-timeframe trend (15m + 1h Supertrend / EMA)
+   - Smart Money Concepts (BOS, CHoCH, order blocks, liquidity sweeps)
+   - Chart patterns (double top/bottom, flags, triangles, rectangles) with volume gate
+   - Quant metrics (Zeta Field, RVOL, OBI, Z-score)
+   - Derivatives (funding rate, basis, CVD divergence)
+4. **Scores everything** and only generates a signal if min-scores in every layer pass.
+5. **Confirms on 5m**: requires 1 closed 5m candle in the signal direction before executing.
+6. **Sizes the position** based on `risk_percent`, leverage, and a hard cap of `max_loss_per_trade_pct`.
+7. **Sends the signal to Telegram**, inserts a pending paper/real order, and monitors fill + TP/SL.
+
+Daily safety limits stop new entries when:
+
+- `max_daily_trades` reached (default 2)
+- Daily PnL ≥ `daily_profit_target_pct` (default +1.2%)
+- Daily PnL ≤ `-max_daily_loss_pct` (default −0.8%)
+- Weekend (`skip_weekends: true`)
 
 ---
 
-## 📦 Dependencies
+## Where the data lives
 
-```
-ccxt>=4.3.0           # Bybit exchange client (REST)
-pybit>=5.6.0          # WebSocket support untuk auto_trade mode
-schedule>=1.2.0       # Job scheduler (scan loop)
-requests>=2.31.0      # HTTP Telegram API
-pytz>=2024.1          # Timezone handling
+Everything is in `data/` next to `main.py`:
 
-pandas>=2.0.0
-pandas_ta>=0.3.14b    # Technical indicators (EMA, Supertrend, MACD, Stoch RSI, dll.)
-numpy>=1.26.0
+| File                     | Contents                                                   |
+|--------------------------|------------------------------------------------------------|
+| `data/bot.db`            | SQLite — signals, active trades, paper balance             |
+| `data/bot.log`           | Rotating log file (5 MB × 3 backups)                       |
+| `data/watchlist.json`    | Cached top-N pairs                                         |
+| `data/state.json`        | Pause flag, last scan timestamp, runtime state             |
 
-scipy>=1.11.0         # argrelextrema (pivot), linregress (slope), expit (Zeta Field)
+To **wipe paper history** and start fresh:
+
+```bash
+rm data/bot.db
 ```
 
----
-
-## 📊 Penilaian Kualitas Kode
-
-> Review menyeluruh terhadap 17 file Python, requirements, config, dan struktur project.
-
-| #         | Bidang                   |    Nilai    | Catatan                                                                             |
-| :-------- | :----------------------- | :---------: | :---------------------------------------------------------------------------------- |
-| 1         | Syntax & Import          |    10/10    | Semua file pass AST check, cross-import valid ✅                                    |
-| 2         | Struktur Kode            |    10/10    | Atomic write ✅, daemon thread rapi ✅, logging terpusat ✅                         |
-| 3         | PnL & Persentase         |    10/10    | Formula benar (qty baked-in leverage) ✅, fee 0.055% ✅, ROI on margin & balance ✅ |
-| 4         | Error Handling           |    10/10    | Semua exception tertangkap dengan tipe spesifik + logger ✅                         |
-| 5         | Config & Validasi        |    10/10    | Key wajib ✅, placeholder check ✅, validasi range TP split / leverage / risk ✅    |
-| 6         | Telegram                 |    10/10    | Rate limit 429 handling ✅, retry 5x ✅, named logger ✅                            |
-| 7         | Kualitas Sinyal          |    10/10    | MTF confluence ✅, BTC bias ✅, SMC lengkap ✅, OBI dari real order book ✅         |
-| 8         | Logging & Observabilitas |    10/10    | Named logger per module ✅, RotatingFileHandler ✅, filter breakdown ✅             |
-| **Total** |                          | **129/130** | Sisa 1 poin: pattern harmonics (Gartley, Bat, Crab) — opsional                      |
+The bot will recreate it with the starting paper balance from `config.json` (`risk.paper_balance`, default `100.0`).
 
 ---
 
-## 🗒️ Catatan Penting
+## Common config knobs
 
-- **Paper mode ≠ tidak akurat.** PnL formula, fee, dan partial TP/SL identik dengan kondisi exchange asli.
-- **API Key untuk paper mode** — hanya butuh permission `Read`. Tidak perlu izin `Trade`.
-- **Watchlist otomatis** — jika `data/watchlist.json` belum ada, bot fetch semua pair USDT perpetual aktif dari Bybit saat startup. Refresh otomatis setiap hari jam 07:00 UTC.
-- **Semua log masuk ke satu file** — termasuk dari `auto_trades.py` via root logger → `data/bot.log`.
-- **Pair stablecoin difilter otomatis** — USDC, DAI, FDUSD, dan sejenisnya dieksklusi dari watchlist.
+These are the ones beginners are most likely to want to change. Everything else has sensible defaults.
+
+| Key                                 | Default          | Meaning                                        |
+|-------------------------------------|------------------|------------------------------------------------|
+| `auto_trade`                        | `false`          | `true` to place real orders. **Be careful.**   |
+| `risk.paper_balance`                | `100.0`          | Starting balance for paper mode (USDT)         |
+| `risk.risk_percent`                 | `0.01`           | 1% of balance risked per trade                 |
+| `risk.max_positions`                | `2`              | Concurrent open trades                         |
+| `risk.max_daily_trades`             | `2`              | Hard cap on new entries per day                |
+| `risk.max_daily_loss_pct`           | `0.008`          | Stop trading after −0.8% day                   |
+| `risk.daily_profit_target_pct`      | `0.012`          | Stop trading after +1.2% day                   |
+| `risk.target_leverage`              | `10`             | Used when `use_max_leverage` is `false`        |
+| `risk.use_max_leverage`             | `true`           | `true` = use Bybit's max leverage per coin     |
+| `risk.max_leverage_cap`             | `100`            | Hard cap regardless of exchange max            |
+| `system.skip_weekends`              | `true`           | Skip Saturday and Sunday                       |
+| `system.timezone`                   | `"Asia/Jakarta"` | Timezone for the daily report scheduler        |
+| `system.scan_post_close_buffer_sec` | `5`              | Wait N seconds after candle close before scan  |
+| `strategy.min_adx`                  | `22`             | Minimum trend strength to take a trade         |
+| `strategy.risk_reward_min`          | `3.0`            | Reject trades with R:R < 3.0                   |
+
+For the full list of strategy parameters, open `config.example.json` — every key is grouped by purpose.
 
 ---
 
-## 📄 Lisensi
+## Troubleshooting
 
-MIT License — lihat file `LICENSE`.
+### `❌ CONFIG ERROR — Key wajib berikut belum diisi`
+
+Your `config.json` is missing `api.telegram_bot_token` or `api.telegram_chat_id`. Fill them in and try again.
+
+### `403 Forbidden` or `Connection refused` when fetching Bybit data
+
+You're in a region where Bybit is blocked. Use a VPN with an exit node in Singapore, Japan, or another country where Bybit operates.
+
+### Telegram `getUpdates error: Not Found`
+
+Your `telegram_bot_token` is wrong or the bot was deleted. Double-check the token in BotFather and update `config.json`. The bot will exit at startup if the token is invalid (since the ops-hardening update).
+
+### `getUpdates 409 Conflict`
+
+You're running two copies of the bot pointing at the same Telegram token. Stop one of them.
+
+### Bot starts but no signals appear for hours
+
+Normal during low-volatility periods or weekends. Check `/status` — if regime is mostly `RANGE` or `ANOMALY`, the strategy is correctly being conservative. To verify it works at all, temporarily set `system.skip_weekends: false` and `strategy.min_adx: 15` (don't trade real money on these settings).
+
+### Paper balance shows weird numbers after a trade
+
+Run `sqlite3 data/bot.db 'SELECT * FROM paper_state;'` to inspect. If you suspect corruption, stop the bot, `rm data/bot.db`, and restart — paper history will reset.
+
+### Bot crashes with `ModuleNotFoundError: ...`
+
+You forgot to activate the virtual environment, or `pip install -r requirements.txt` didn't complete. Re-run both.
+
+### `Watchlist stale (Xh > 36h max)`
+
+Watchlist refresh failed for >36 hours (Bybit rate-limit, network, or VPN issue). The bot will try again on the next scan cycle. If it persists, delete `data/watchlist.json` to force a fresh fetch.
+
+---
+
+## Updating the bot
+
+```bash
+cd Bot-Auto-Screening-Bybit
+git pull
+source venv/bin/activate
+pip install -r requirements.txt --upgrade
+```
+
+Then restart `python main.py`. Your `config.json` and `data/` folder are not touched by `git pull`.
+
+If a new release adds new config keys, the bot will tell you on startup. You can also `diff config.example.json config.json` to spot missing fields.
+
+---
+
+## Project layout
+
+```
+.
+├── main.py                       # entry point — scheduler & scan loop
+├── auto_trades.py                # real-order execution (auto_trade=true)
+├── config.example.json           # config template
+├── requirements.txt
+└── modules/
+    ├── config_loader.py          # validates config.json on startup
+    ├── exchange.py               # Bybit client (ccxt) — retry, leverage cache
+    ├── database.py               # SQLite — atomic balance, signal claim
+    ├── leverage.py               # per-coin max leverage resolver
+    ├── watchlist.py              # daily top-volume pair refresh
+    ├── technicals.py             # EMA, MACD, Stoch RSI, ADX, divergence
+    ├── smc.py                    # Smart Money Concepts (BOS/CHoCH/OB/sweep)
+    ├── patterns.py               # chart patterns (DT/DB, flags, triangles)
+    ├── quant.py                  # Zeta Field, RVOL, Z-score, OBI
+    ├── derivatives.py            # funding rate, basis, CVD divergence
+    ├── regime.py                 # market regime classifier
+    ├── range_strategy.py         # mean-revert + breakout for RANGE regime
+    ├── paper_trader.py           # paper fill simulation, slippage, PnL
+    ├── paper_runner.py           # paper runner daemon (ingest/execute/monitor)
+    ├── telegram_bot.py           # alerts, dashboard, scan completion
+    ├── telegram_commands.py      # /status, /pause, /resume, /report ...
+    └── notifier.py               # send/send_reply with retry-aware Telegram
+```
+
+---
+
+## Disclaimer
+
+This software is provided **as-is, with no warranty of any kind**, for educational and research purposes. Trading cryptocurrency futures involves substantial risk and is not suitable for every investor. The authors are not responsible for any financial losses, account suspensions, exchange ToS violations, or other damages arising from the use of this bot. **Use at your own risk.**
+
+Always:
+
+1. Test in paper mode for at least 1–2 weeks.
+2. Start with a small balance you can afford to lose.
+3. Use IP-whitelisted, withdrawal-disabled API keys.
+4. Watch the bot for the first few days of real trading.
