@@ -41,9 +41,9 @@ logger = logging.getLogger("PaperRunner")
 
 # ─── Config ────────────────────────────────────────────────────────────────
 RISK             = CONFIG["risk"]
-USE_MAX_LEVERAGE = RISK.get("use_max_leverage", False)   # True = pakai max lev tiap coin dari Bybit
+USE_MAX_LEVERAGE = RISK.get("use_max_leverage", True)    # default ON: pakai max lev tiap coin
 TARGET_LEV       = RISK["target_leverage"]               # Fallback / fixed leverage jika use_max_leverage=False
-MAX_LEVERAGE_CAP = RISK.get("max_leverage_cap", 20)      # Hard cap — tidak bisa dilewati meski Bybit izinkan lebih
+MAX_LEVERAGE_CAP = RISK.get("max_leverage_cap", 100)     # Hard cap — sinkron dengan auto_trades.py
 RISK_PERCENT     = RISK["risk_percent"]
 MAX_POSITIONS    = RISK["max_positions"]
 MAX_DAILY_LOSS   = RISK.get("max_daily_loss_pct", 0.01)
@@ -85,31 +85,12 @@ def _get_client() -> BybitClient:
 
 def _get_leverage_for(symbol: str) -> int:
     """
-    Tentukan leverage yang akan dipakai untuk satu symbol.
-
-    use_max_leverage: true  → ambil max leverage per coin dari Bybit
-                               (BTC=100x, GALA=25x, DOGE=50x, dst)
-    use_max_leverage: false → pakai target_leverage dari config (fixed semua coin)
-
-    Sumber data: BybitClient.fetch_max_leverage()
-      → baca info.leverageFilter.maxLeverage (Bybit native, paling akurat)
-      → fallback ke limits.leverage.max (ccxt standard)
-      → fallback ke TARGET_LEV (config)
+    Resolve leverage untuk satu symbol via modules.leverage agar paper-mode
+    dan real-mode tidak pernah melenceng (default lama berbeda: paper 20x,
+    real 100x).
     """
-    if not USE_MAX_LEVERAGE:
-        return min(TARGET_LEV, MAX_LEVERAGE_CAP)
-
-    client  = _get_client()
-    max_lev = client.fetch_max_leverage(symbol, fallback=TARGET_LEV)
-
-    # Hard cap: tidak boleh melebihi max_leverage_cap, apapun yang Bybit izinkan
-    capped = min(max_lev, MAX_LEVERAGE_CAP)
-    if capped < max_lev:
-        logger.info(
-            f"[{symbol}] leverage Bybit={max_lev}x → di-cap menjadi {capped}x "
-            f"(max_leverage_cap={MAX_LEVERAGE_CAP}x)"
-        )
-    return capped
+    from modules.leverage import resolve_leverage
+    return resolve_leverage(symbol, client=_get_client())
 
 
 # ══════════════════════════════════════════════════════════════════════════════

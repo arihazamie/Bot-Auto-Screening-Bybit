@@ -25,9 +25,9 @@
   },
 
   "risk": {
-    "use_max_leverage": false,
+    "use_max_leverage": true,
     "target_leverage": 10,
-    "max_leverage_cap": 20,
+    "max_leverage_cap": 100,
     "risk_percent": 0.01,
     "max_positions": 2,
     "max_daily_loss_pct": 0.008,
