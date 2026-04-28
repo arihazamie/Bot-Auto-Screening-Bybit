@@ -73,7 +73,9 @@ cp config.example.json config.json
 | `system.min_candles_analysis`  | `150`                 | Minimum candle OHLCV untuk analisis                   |
 | `system.watchlist_top_n`       | `100`                 | Jumlah pair teratas yang masuk watchlist              |
 | `system.active_hours_utc`      | `[6, 22]`             | Window jam aktif scan UTC `[start, end)`              |
-| `risk.target_leverage`         | `25`                  | Leverage target (dibatasi oleh limit exchange)        |
+| `risk.use_max_leverage`        | `true`                | `true` = pakai max leverage per coin dari Bybit (BTC=100x, SOL=50x, dll); `false` = pakai `target_leverage` flat |
+| `risk.target_leverage`         | `25`                  | Leverage target saat `use_max_leverage=false`         |
+| `risk.max_leverage_cap`        | `100`                 | Hard cap leverage — paper & real mode pakai nilai sama |
 | `risk.risk_percent`            | `0.01`                | Risiko per trade: 1% dari balance                     |
 | `risk.max_positions`           | `20`                  | Maks posisi terbuka bersamaan                         |
 | `risk.max_daily_loss_pct`      | `0.05`                | Stop trading jika loss harian > 5%                    |

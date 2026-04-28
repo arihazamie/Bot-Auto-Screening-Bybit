@@ -5,7 +5,7 @@ import os
 import sys
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 import pandas as pd
 import pandas_ta as ta
@@ -53,6 +53,10 @@ from modules.paper_runner import run_paper_update
 # Set "debug": true di config.json untuk verbose output
 # ─────────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = logging.DEBUG if CONFIG.get("debug", False) else logging.INFO
+
+# Auto-create data/ before logging.basicConfig so RotatingFileHandler
+# does not crash when main.py is imported as a library.
+os.makedirs("data", exist_ok=True)
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -1094,7 +1098,7 @@ def is_active_hour() -> bool:
       • skip_weekends  : skip Sat/Sun ketika True
       • skip_hours_utc : daftar jam UTC tambahan yang ditolak (mis. low-liquidity window)
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if SKIP_WEEKENDS and now.weekday() >= 5:        # 5 = Sat, 6 = Sun
         return False
     if SKIP_HOURS_UTC and now.hour in SKIP_HOURS_UTC:
@@ -1148,7 +1152,7 @@ def scan():
         window = CONFIG["system"].get("active_hours_utc", [6, 22])
         logger.info(
             f"🌙 Scan dilewati — di luar jam aktif "
-            f"(sekarang {datetime.utcnow().strftime('%H:%M')} UTC, "
+            f"(sekarang {datetime.now(timezone.utc).strftime('%H:%M')} UTC, "
             f"aktif {window[0]:02d}:00–{window[1]:02d}:00 UTC)"
         )
         return
@@ -1296,7 +1300,7 @@ def send_heartbeat():
             f"💼 Balance      : <code>{bal_str}</code>\n"
             f"📊 Trades hari ini : <code>{trade_count}/{MAX_DAILY_TRADES or '∞'}</code>\n"
             f"🔧 Mode         : <code>{mode_label}</code>\n"
-            f"<i>🕐 {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC</i>"
+            f"<i>🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC</i>"
         )
         from modules.telegram_bot import send_alert
         from modules.notifier import send
