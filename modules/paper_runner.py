@@ -15,7 +15,10 @@ import time
 import logging
 import threading
 from datetime import datetime, timezone
-
+try:
+    from zoneinfo import ZoneInfo            # Python ≥ 3.9
+except ImportError:                           # pragma: no cover
+    from backports.zoneinfo import ZoneInfo  # type: ignore
 
 from modules.config_loader import CONFIG
 from modules.exchange import BybitClient
@@ -52,6 +55,15 @@ MAX_DAILY_LOSS   = RISK.get("max_daily_loss_pct", 0.01)
 DAILY_TARGET     = RISK.get("daily_profit_target_pct", 0.015)
 MAX_DAILY_TRADES = RISK.get("max_daily_trades", 3)
 MODE             = "PAPER"
+
+# Daily report dijalankan pada jam tetap user-TZ (bukan UTC, bukan TZ VPS),
+# supaya bot di host mana pun tetap report jam 07:00 WIB sesuai harapan.
+USER_TZ_NAME     = CONFIG.get("system", {}).get("timezone", "Asia/Jakarta")
+DAILY_REPORT_HOUR = int(CONFIG.get("system", {}).get("daily_report_hour", 7))
+try:
+    USER_TZ = ZoneInfo(USER_TZ_NAME)
+except Exception:
+    USER_TZ = ZoneInfo("UTC")
 
 # ─── FIX #02 Part B: Max Loss Per Trade ──────────────────────────────────────
 # Batas kerugian maksimum per trade sebagai % dari total modal (balance).
@@ -444,11 +456,12 @@ def _run_loop():
                 _ingest_signals()
                 last_ingest = now
 
-            # Daily report jam 07:00 UTC (sebelumnya local time, fix #2)
-            now_utc      = datetime.now(timezone.utc)
-            current_day  = now_utc.day
-            current_hour = now_utc.hour
-            if current_hour == 7 and current_day != last_report_day:
+            # Daily report jam DAILY_REPORT_HOUR di USER_TZ (default 07:00
+            # Asia/Jakarta — yaitu 7 WIB, terkunci tanpa peduli TZ VPS).
+            now_local    = datetime.now(USER_TZ)
+            current_day  = now_local.day
+            current_hour = now_local.hour
+            if current_hour == DAILY_REPORT_HOUR and current_day != last_report_day:
                 _daily_report()
                 last_report_day = current_day
 

@@ -536,7 +536,10 @@ if __name__ == "__main__":
     else:
         schedule.every(10).seconds.do(monitor_paper_trades)
 
-    schedule.every().day.at("00:00").do(daily_report)
+    # Daily report dikunci ke timezone user (default Asia/Jakarta), jam 07:00 WIB.
+    user_tz = CONFIG.get("system", {}).get("timezone", "Asia/Jakarta")
+    daily_report_hour = int(CONFIG.get("system", {}).get("daily_report_hour", 7))
+    schedule.every().day.at(f"{daily_report_hour:02d}:00", user_tz).do(daily_report)
 
     logger.info(f"🚀 Bot running in {MODE} mode. Press Ctrl+C to stop.")
     try:
