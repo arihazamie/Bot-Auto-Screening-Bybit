@@ -1373,11 +1373,13 @@ if __name__ == "__main__":
     #   • schedule.every(1).minutes.do(run_paper_update) → DIHAPUS karena
     #     start_paper_runner() sudah jalankan ingest/execute/monitor sebagai
     #     daemon. Dua-duanya jalan = race condition (fix #1A).
-    # Fix #2: jadwalkan tugas harian di UTC (sebelumnya local time bikin
-    # report jalan offset 7 jam di Indonesia).
-    schedule.every().day.at("07:00", "UTC").do(refresh_daily_watchlist)
-    # FIX #01: Purge data lama setiap hari jam 03:00 UTC — cegah disk full
-    schedule.every().day.at("03:00", "UTC").do(purge_old_data)
+    # Jadwal harian dikunci ke timezone user (default Asia/Jakarta lewat
+    # system.timezone) — tidak bergantung TZ VPS, tidak bergeser kalau
+    # bot dipindahkan host. DB timestamps tetap UTC untuk konsistensi data.
+    user_tz = CONFIG.get("system", {}).get("timezone", "Asia/Jakarta")
+    schedule.every().day.at("07:00", user_tz).do(refresh_daily_watchlist)
+    # FIX #01: Purge data lama setiap hari jam 03:00 user-TZ — cegah disk full
+    schedule.every().day.at("03:00", user_tz).do(purge_old_data)
     # FIX #03: Heartbeat ke Telegram tiap jam — operational awareness
     schedule.every(1).hours.do(send_heartbeat)
 
@@ -1414,8 +1416,8 @@ if __name__ == "__main__":
         return target
 
     print("\n🚀 Bot Started.")
-    print(f"🕖 Watchlist refresh otomatis setiap hari jam 07:00 UTC")
-    print(f"🧹 DB purge otomatis setiap hari jam 03:00 UTC (cegah disk full)")
+    print(f"🕖 Watchlist refresh otomatis setiap hari jam 07:00 {user_tz}")
+    print(f"🧹 DB purge otomatis setiap hari jam 03:00 {user_tz} (cegah disk full)")
     print(f"💗 Heartbeat Telegram otomatis setiap 1 jam")
     print(f"📐 Scan candle-aligned: setiap candle {ENTRY_TF} close + {boundary_buffer:.0f}s buffer")
     print(f"💡 Tip: set \"debug\": true di config.json untuk verbose output\n")
