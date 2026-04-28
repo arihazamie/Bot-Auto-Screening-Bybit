@@ -467,7 +467,17 @@ def entry_quality_reject_reason(
     if entry <= 0:
         return "entry<=0"
 
-    adx = float(df["adx"].iloc[-1]) if "adx" in df.columns else 0.0
+    # NaN-aware: float(NaN) < MIN_ADX evaluates to False in Python which
+    # would silently let candles with corrupted indicator data bypass the
+    # gate. Treat both "missing column" and "NaN value" as fail-closed.
+    if "adx" not in df.columns:
+        adx = 0.0
+    else:
+        try:
+            raw_adx = float(df["adx"].iloc[-1])
+            adx = raw_adx if np.isfinite(raw_adx) else 0.0
+        except Exception:
+            adx = 0.0
     if MIN_ADX and adx < MIN_ADX:
         return f"ADX {adx:.1f} < {MIN_ADX:.1f}"
 

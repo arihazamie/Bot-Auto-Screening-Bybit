@@ -142,9 +142,15 @@ def analyze_derivatives(df, ticker, side):
     if "adx" in df.columns:
         try:
             last_adx = float(df["adx"].iloc[-1])
-            adx_ok   = last_adx >= CVD_MIN_ADX
+            # NaN-aware: NaN < threshold evaluates to False in Python which
+            # would silently let bad-data candles through. Treat non-finite
+            # ADX as fail-closed — divergence not counted.
+            if not np.isfinite(last_adx):
+                adx_ok = False
+            else:
+                adx_ok = last_adx >= CVD_MIN_ADX
         except Exception:
-            adx_ok = True  # tidak bisa baca ADX → fallback aman: allow
+            adx_ok = True  # genuine read error → fail-open (preserve old behavior)
 
     lb = max(10, CVD_LOOKBACK)
     if len(df) >= lb and adx_ok:

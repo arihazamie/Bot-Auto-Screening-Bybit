@@ -65,12 +65,25 @@ def range_strategy_enabled() -> bool:
 
 
 def _bb_bands(close: pd.Series) -> dict | None:
+    """
+    Resolve Bollinger band columns by prefix. Returns None if any of the
+    three required bands cannot be matched — old code fell back to
+    positional indices, but the order changes between pandas_ta versions
+    (BBL/BBM/BBU vs BBL/BBU/BBM) so a missing-prefix scenario silently
+    swapped bands.
+    """
     bb = ta.bbands(close, length=BB_LENGTH, std=BB_STD)
     if bb is None or bb.empty:
         return None
-    upper = next((c for c in bb.columns if c.startswith("BBU_")), bb.columns[0])
-    lower = next((c for c in bb.columns if c.startswith("BBL_")), bb.columns[2])
-    middle = next((c for c in bb.columns if c.startswith("BBM_")), bb.columns[1])
+    upper  = next((c for c in bb.columns if c.startswith("BBU_")), None)
+    lower  = next((c for c in bb.columns if c.startswith("BBL_")), None)
+    middle = next((c for c in bb.columns if c.startswith("BBM_")), None)
+    if not (upper and lower and middle):
+        logger.warning(
+            f"_bb_bands: cannot identify BBU/BBL/BBM in {list(bb.columns)} — "
+            "skipping range signal"
+        )
+        return None
     return {"upper": bb[upper], "lower": bb[lower], "middle": bb[middle]}
 
 
