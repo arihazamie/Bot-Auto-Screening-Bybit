@@ -21,7 +21,9 @@
     "watchlist_top_n": 100,
     "active_hours_utc": [6, 22],
     "skip_weekends": true,
-    "skip_hours_utc": []
+    "skip_hours_utc": [],
+    "watchlist_max_age_hours": 36,
+    "scan_post_close_buffer_sec": 5
   },
 
   "risk": {

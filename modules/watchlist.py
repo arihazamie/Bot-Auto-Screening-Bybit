@@ -13,7 +13,9 @@ Alur:
 import json
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+
+from modules.config_loader import CONFIG
 
 logger = logging.getLogger("Watchlist")
 
@@ -21,6 +23,13 @@ logger = logging.getLogger("Watchlist")
 BASE_DIR      = os.path.join(os.path.dirname(__file__), '..', 'data')
 WATCHLIST_F   = os.path.join(BASE_DIR, 'watchlist.json')
 TOP_N         = 100
+
+# Fix #3: anggap watchlist stale kalau lebih tua dari `max_age_hours`.
+# Default 36 jam (refresh harian + 12 jam toleransi). Override via
+# system.watchlist_max_age_hours di config.
+_MAX_AGE_HOURS = float(
+    CONFIG.get("system", {}).get("watchlist_max_age_hours", 36.0)
+)
 
 STABLECOINS = {
     'USDC', 'USDT', 'DAI', 'FDUSD', 'USDD', 'USDE',
@@ -76,12 +85,13 @@ def refresh_watchlist(exchange, top_n: int = TOP_N) -> list[str]:
         top = ranked[:top_n]
         symbols = [r['symbol'] for r in top]
 
-        # Simpan ke cache
+        # Simpan ke cache. updated_at pakai UTC ISO supaya `get_watchlist()`
+        # bisa parse umurnya untuk max-age guard (fix #3).
         cache = {
-            "updated_at": str(datetime.now()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
             "top_n":      top_n,
             "symbols":    symbols,
-            "detail":     top,   # termasuk volume untuk info
+            "detail":     top,
         }
         with open(WATCHLIST_F, 'w') as f:
             json.dump(cache, f, indent=2)
@@ -100,10 +110,30 @@ def refresh_watchlist(exchange, top_n: int = TOP_N) -> list[str]:
         return []
 
 
+def _cache_age_hours(updated_at_str: str) -> float | None:
+    """Return age (hours) of `updated_at_str`, atau None kalau tidak bisa parse."""
+    if not updated_at_str:
+        return None
+    try:
+        # Format baru (ISO UTC dari fix #3) ATAU format lama str(datetime.now())
+        try:
+            ts = datetime.fromisoformat(updated_at_str)
+        except ValueError:
+            ts = datetime.strptime(updated_at_str.split(".")[0], "%Y-%m-%d %H:%M:%S")
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
 def get_watchlist() -> list[str] | None:
     """
     Baca watchlist dari cache.
-    Return None jika cache belum ada atau kosong.
+
+    Fix #3: kalau cache lebih tua dari `_MAX_AGE_HOURS`, return None supaya
+    caller paksa re-refresh (atau fallback). Tanpa guard ini, refresh yang
+    gagal berhari-hari membuat bot scan pair yang sudah delisted.
     """
     if not os.path.exists(WATCHLIST_F):
         return None
@@ -115,8 +145,17 @@ def get_watchlist() -> list[str] | None:
         if not symbols:
             return None
 
-        updated_at = data.get('updated_at', 'unknown')
-        logger.info(f"📋 Watchlist loaded: {len(symbols)} pairs (updated: {updated_at})")
+        updated_at = data.get('updated_at', '')
+        age_h = _cache_age_hours(updated_at)
+        if age_h is not None and age_h > _MAX_AGE_HOURS:
+            logger.warning(
+                f"⚠️  Watchlist stale ({age_h:.1f}h > {_MAX_AGE_HOURS:.0f}h max) "
+                f"— treating as empty so caller akan re-refresh"
+            )
+            return None
+
+        age_label = f"{age_h:.1f}h ago" if age_h is not None else updated_at
+        logger.info(f"📋 Watchlist loaded: {len(symbols)} pairs (age: {age_label})")
         return symbols
 
     except Exception as e:
