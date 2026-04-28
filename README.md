@@ -94,6 +94,57 @@ cp config.example.json config.json
 | `patterns.tolerance`           | `0.015`               | Toleransi harga alignment check (1.5%)                |
 | `patterns.<name>`              | `true`                | Enable/disable deteksi pattern tertentu               |
 
+### Anomaly Hardening (fix A–L) — parameter baru
+
+| Key                                          | Default     | Fix | Catatan                                                      |
+| -------------------------------------------- | ----------- | --- | ------------------------------------------------------------ |
+| `system.confirm_timeframe`                   | `"5m"`      | L   | Timeframe LTF micro-confirm sebelum eksekusi                 |
+| `system.skip_weekends`                       | `true`      | J   | Skip Sabtu/Minggu (low-liq + funding artefak)                |
+| `system.skip_hours_utc`                      | `[]`        | J   | List jam UTC tambahan untuk di-skip                          |
+| `patterns.volume_multiplier`                 | `1.8`       | A   | Threshold volume gate breakout (vs 1.2 lama)                 |
+| `patterns.min_pattern_adx`                   | `20`        | A   | ADX(14) minimum untuk triangle/flag/rectangle                |
+| `patterns.min_double_gap_bars`               | `5`         | A   | Jarak minimum 2 puncak/lembah double pattern                 |
+| `patterns.min_double_reject_atr`             | `0.4`       | A   | Reject min × ATR setelah touch kedua                         |
+| `strategy.max_funding_long`                  | `0.0008`    | C   | Skala fraksi (Bybit native, bukan persen)                    |
+| `strategy.min_funding_short`                 | `-0.0008`   | C   | Skala fraksi                                                 |
+| `strategy.cool_funding_abs`                  | `0.0002`    | C   | Threshold "Cool Funding" bonus                               |
+| `strategy.bonus_funding_min`                 | `0.0003`    | C   | Funding edge bonus untuk side berlawanan                     |
+| `strategy.cvd_lookback`                      | `30`        | D   | Window divergence price↔CVD                                  |
+| `strategy.cvd_min_adx`                       | `20`        | D   | ADX(14) minimum agar divergence dianggap valid               |
+| `strategy.smc_min_displacement_body_pct`     | `0.006`     | B   | Body % minimum agar OB dianggap "displaced"                  |
+| `strategy.smc_bos_min_adx`                   | `18`        | B   | Suppress BOS/CHoCH bonus saat range chop                     |
+| `strategy.smc_sweep_base_tolerance`          | `0.002`     | B   | Sweep tolerance dasar (auto-naik ke ATR%)                    |
+| `strategy.smc_premdisc_window`               | `80`        | B   | Window pivot untuk premium/discount mapping                  |
+| `strategy.regime.trend_adx`                  | `22`        | E   | ADX threshold TREND_BULL/TREND_BEAR                          |
+| `strategy.regime.anomaly_atr_pct`            | `0.025`     | E   | ATR% threshold ANOMALY (skip scan)                           |
+| `strategy.regime.squeeze_bbw_pct`            | `0.20`      | E   | BBW percentile rank → SQUEEZE                                |
+| `strategy.regime.range_bbw_pct`              | `0.50`      | E   | BBW percentile rank → RANGE                                  |
+| `strategy.regime.lookback`                   | `120`       | E   | Window untuk rank BB-width                                   |
+| `strategy.range.enabled`                     | `true`      | K   | Aktifkan modul range_strategy                                |
+| `strategy.range.bb_length / bb_std`          | `20 / 2.0`  | K   | Bollinger params                                             |
+| `strategy.range.rsi_oversold / rsi_overbought` | `30 / 70` | K   | RSI threshold mean-revert                                    |
+| `strategy.range.squeeze_breakout_volume_mult` | `1.5`      | K   | Volume mult untuk squeeze-breakout signal                    |
+| `strategy.ltf_confirmation.enabled`          | `true`     | L   | Aktifkan LTF (5m) confirmation                               |
+| `strategy.ltf_confirmation.lookback_bars`    | `3`        | L   | Bar yang dicek di LTF                                        |
+| `strategy.correlation_threshold`             | `0.7`      | I   | Z-score correlation threshold (vs Pearson 0.85 lama)         |
+| `strategy.correlation_use_zscore`            | `true`     | I   | Gunakan rolling z-score (resistant ke outlier)               |
+| `strategy.correlation_sector_max`            | `1`        | I   | Max posisi aktif per sektor                                  |
+| `risk.paper_slippage_bps`                    | `5`        | G   | Slippage simulasi paper (bps)                                |
+| `risk.paper_spread_bps`                      | `2`        | G   | Spread simulasi paper (bps)                                  |
+| `risk.paper_max_spread_bps`                  | `50`       | G   | Reject fill paper jika spread > threshold                    |
+
+#### Routing regime-aware (Fix E + K)
+
+`scan()` sekarang mengklasifikasi tiap simbol ke salah satu dari 5 regime:
+
+| Regime        | Aksi                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| `TREND_BULL`  | Hanya signal **Long** dari chart pattern path standar.                                            |
+| `TREND_BEAR`  | Hanya signal **Short** dari chart pattern path standar.                                           |
+| `RANGE`       | Coba `find_range_signal()` dulu (BB revert / failed-breakout). Fallback ke pattern (jarang lolos). |
+| `SQUEEZE`     | Sama dengan RANGE, tetapi `squeeze_breakout_*` aktif jika volume eksplosif.                       |
+| `ANOMALY`     | **Skip scan**: ATR% mengindikasikan flash-event/black-swan; tidak ambil posisi baru.              |
+
 ---
 
 ## 🚀 Instalasi & Menjalankan

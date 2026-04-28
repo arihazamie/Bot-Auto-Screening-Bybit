@@ -11,6 +11,17 @@ smc.py — Smart Money Concepts Analysis v2
   6. Premium / Discount Zone + OTE (61.8–78.6% Fibonacci retracement)
   7. Inducement (IDM)   — minor swing swept before key level
 
+ANOMALY HARDENING (fix B) — range-aware tweaks:
+  • OB displacement now ALSO requires absolute candle body >= MIN_DISPLACEMENT_BODY_PCT
+    (default 0.6%). Previously a tiny candle in a low-vol pair could pass
+    the relative gate (1.5 × avg_body) and earn the +1 bonus.
+  • Liquidity-sweep tolerance scales with ATR%: tolerance = max(0.002, atr_pct).
+    In tight ranges this prevents normal wicks from being labelled stop-hunts.
+  • BOS / CHoCH scoring suppressed when ADX(14) < SMC_MIN_ADX (default 18):
+    in range chop, repeated false-BOS would otherwise gift +2 per scan.
+  • Premium / Discount mapped to a recent window (default 80 bars) instead of
+    all-time pivots — outlier wicks no longer push pos near 0.5.
+
 Upgrades from v1 (8.5 → 10/10):
   [A] Pivot detection: strict np.less / np.greater — eliminates false pivots
       at equal-value candle sequences (plateaus) that argrelextrema ≤/≥ returns.
@@ -42,7 +53,40 @@ import logging
 import numpy as np
 from scipy.signal import argrelextrema
 
+from modules.config_loader import CONFIG
+
 logger = logging.getLogger("SMC")
+
+_SMC_CFG = CONFIG.get("strategy", {})
+MIN_DISPLACEMENT_BODY_PCT = float(_SMC_CFG.get("smc_min_displacement_body_pct", 0.006))
+SMC_MIN_ADX               = float(_SMC_CFG.get("smc_bos_min_adx", 18.0))
+SWEEP_BASE_TOLERANCE      = float(_SMC_CFG.get("smc_sweep_base_tolerance", 0.002))
+PREM_DISC_WINDOW          = int(_SMC_CFG.get("smc_premdisc_window", 80))
+
+
+def _adx_value(df) -> float:
+    """Read last ADX(14) from df, fail-soft to 100 (treat unknown as 'trending')."""
+    if "adx" not in df.columns:
+        return 100.0
+    try:
+        v = float(df["adx"].iloc[-1])
+        return v if np.isfinite(v) else 100.0
+    except Exception:
+        return 100.0
+
+
+def _atr_pct(df, length: int = 14) -> float:
+    """Cheap ATR% proxy without depending on pandas_ta."""
+    if len(df) < length + 1:
+        return 0.0
+    high  = df["high"].iloc[-length:].values
+    low   = df["low"].iloc[-length:].values
+    close = df["close"].iloc[-length - 1: -1].values
+    tr = np.maximum(high - low, np.maximum(np.abs(high - close), np.abs(low - close)))
+    if not len(tr):
+        return 0.0
+    last_close = float(df["close"].iloc[-1])
+    return float(np.mean(tr)) / last_close if last_close > 0 else 0.0
 
 
 # ── Pivot helpers ─────────────────────────────────────────────────────────────
@@ -143,8 +187,12 @@ def find_order_blocks(df, lookback: int = 50) -> dict:
                 future_close = df["close"].iloc[i + 2:]
                 if not (future_close <= ob_high).any():          # body-close mitigation check
                     eng_body  = abs(df["close"].iloc[i+1] - df["open"].iloc[i+1])
+                    eng_open  = float(df["open"].iloc[i+1])
+                    body_pct  = eng_body / eng_open if eng_open > 0 else 0.0
                     has_fvg   = (i + 2 < n and df["low"].iloc[i+2] > ob_high)
-                    displaced = (eng_body > avg_body * 1.5) or has_fvg
+                    rel_disp  = (eng_body > avg_body * 1.5) or has_fvg
+                    # fix B: require BOTH relative AND absolute displacement
+                    displaced = bool(rel_disp and body_pct >= MIN_DISPLACEMENT_BODY_PCT)
                     obs["bull"].append((ob_low, ob_high, displaced))
 
         # Bearish OB: bullish candle followed by engulfing bearish move
@@ -153,8 +201,11 @@ def find_order_blocks(df, lookback: int = 50) -> dict:
                 future_close = df["close"].iloc[i + 2:]
                 if not (future_close >= ob_low).any():           # body-close mitigation check
                     eng_body  = abs(df["close"].iloc[i+1] - df["open"].iloc[i+1])
+                    eng_open  = float(df["open"].iloc[i+1])
+                    body_pct  = eng_body / eng_open if eng_open > 0 else 0.0
                     has_fvg   = (i + 2 < n and df["high"].iloc[i+2] < ob_low)
-                    displaced = (eng_body > avg_body * 1.5) or has_fvg
+                    rel_disp  = (eng_body > avg_body * 1.5) or has_fvg
+                    displaced = bool(rel_disp and body_pct >= MIN_DISPLACEMENT_BODY_PCT)
                     obs["bear"].append((ob_low, ob_high, displaced))
 
     return obs
@@ -231,12 +282,17 @@ def check_fvg_zone(price: float, fvgs: dict) -> tuple:
 # ── 5. Liquidity Sweep ────────────────────────────────────────────────────────
 
 def detect_liquidity_sweep(df, side: str,
-                            tolerance: float = 0.002,
+                            tolerance: float = None,
                             lookback:  int   = 30) -> tuple:
     """
     Liquidity grab: equal highs/lows pool swept by a wick, price closes back.
     Returns (swept: bool, reason: str).
+
+    fix B: tolerance scales with current ATR% so tight ranges do not spam
+    "sweep" labels for ordinary wicks. Caller can still pass an explicit value.
     """
+    if tolerance is None:
+        tolerance = max(SWEEP_BASE_TOLERANCE, _atr_pct(df))
     n     = len(df)
     start = max(0, n - lookback)
 
@@ -267,7 +323,7 @@ def detect_liquidity_sweep(df, side: str,
 
 # ── 6. Premium / Discount Zone + OTE ─────────────────────────────────────────
 
-def get_premium_discount(df) -> tuple:
+def get_premium_discount(df, window: int = None) -> tuple:
     """
     [Upgrade B] Maps current price to last major swing range (0.0 - 1.0).
 
@@ -287,7 +343,11 @@ def get_premium_discount(df) -> tuple:
     Returns (zone: str, position: float 0-1, in_ote: bool).
     """
     try:
-        highs, lows = find_pivots(df)
+        # fix B: use a recent window instead of all-time max/min so outlier
+        # wicks from earlier history do not pin pos near equilibrium 0.5.
+        win = window if window is not None else PREM_DISC_WINDOW
+        sub = df.iloc[-win:] if win > 0 and len(df) > win else df
+        highs, lows = find_pivots(sub)
         if len(highs) < 1 or len(lows) < 1:
             return "Neutral", 0.5, False
 
@@ -387,7 +447,15 @@ def analyze_smc(df, side: str):
         elif struct in ("HL", "HH"): return False, 0, [f"Avoid Short at {struct}"]
 
     # 2. BOS / CHoCH
+    # fix B: only score BOS/CHoCH when ADX confirms trend strength. In a
+    # range, repeated swing breaks-and-revert would otherwise gift +2 per scan.
     bos, choch = detect_bos_choch(df)
+    bos_trust  = _adx_value(df) >= SMC_MIN_ADX
+    if not bos_trust:
+        # negative side stays (-1 contradicting BOS still cheaply applied) but
+        # positive bonuses suppressed in range chop.
+        bos, choch = (None if bos in ("Bullish BOS", "Bearish BOS") else bos,
+                      None)
     if side == "Long":
         if bos   == "Bullish BOS":   score += 2; reasons.append("Bullish BOS v")
         if choch == "Bullish CHoCH": score += 1; reasons.append("Bullish CHoCH")

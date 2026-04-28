@@ -40,6 +40,8 @@ from modules.quant import calculate_metrics, check_fakeout
 from modules.derivatives import analyze_derivatives
 from modules.smc import analyze_smc
 from modules.patterns import find_pattern, pattern_direction
+from modules.regime import classify_regime, regime_allows
+from modules.range_strategy import find_range_signal, range_strategy_enabled
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 from modules.paper_runner import start_paper_runner
 from modules.telegram_commands import start_command_listener, is_paused
@@ -84,9 +86,21 @@ print(f"   Debug   : {'ON 🔍' if DEBUG_MODE else 'OFF (set \"debug\": true di 
 print(f"   Env     : {CONFIG.get('env', 'PROD')}")
 print("=" * 60)
 
-ENTRY_TF = CONFIG["system"].get("entry_timeframe", "15m")
-TREND_TF = CONFIG["system"].get("trend_timeframe", "1h")
-print(f"📐 Timeframes — Entry: {ENTRY_TF} | Trend: {TREND_TF}")
+ENTRY_TF   = CONFIG["system"].get("entry_timeframe", "15m")
+TREND_TF   = CONFIG["system"].get("trend_timeframe", "1h")
+CONFIRM_TF = CONFIG["system"].get("confirm_timeframe", "5m")
+print(f"📐 Timeframes — Entry: {ENTRY_TF} | Trend: {TREND_TF} | Confirm: {CONFIRM_TF}")
+
+SKIP_WEEKENDS  = bool(CONFIG["system"].get("skip_weekends", True))
+SKIP_HOURS_UTC = list(CONFIG["system"].get("skip_hours_utc", []))
+
+_LTF_CFG       = CONFIG.get("strategy", {}).get("ltf_confirmation", {})
+LTF_ENABLED    = bool(_LTF_CFG.get("enabled", True))
+LTF_LOOKBACK   = int(_LTF_CFG.get("lookback_bars", 3))
+LTF_REQUIRE_CLOSE = bool(_LTF_CFG.get("require_close_in_direction", True))
+
+_REGIME_CFG          = CONFIG.get("strategy", {}).get("regime", {})
+REGIME_SKIP_ANOMALY  = bool(_REGIME_CFG.get("skip_when_anomaly", True))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -245,11 +259,35 @@ MTF_CONFLUENCE_ENABLED = bool(STRATEGY_CFG.get("mtf_confluence_enabled", True))
 #
 # Config (bagian "strategy" di config.json):
 #   "correlation_filter_enabled": true   ← toggle on/off
-#   "correlation_threshold":      0.85   ← koefisien Pearson, 0.85 = sangat correlated
+#   "correlation_threshold":      0.7    ← absolute z-score threshold (fix I)
 #   "correlation_lookback":       50     ← jumlah candle untuk hitung korelasi
-CORRELATION_ENABLED   = bool(STRATEGY_CFG.get("correlation_filter_enabled", True))
-CORRELATION_THRESHOLD = float(STRATEGY_CFG.get("correlation_threshold", 0.85))
-CORRELATION_LOOKBACK  = int(STRATEGY_CFG.get("correlation_lookback", 50))
+#   "correlation_use_zscore":     true   ← rolling z-score returns (resistant)
+#   "correlation_sector_max":     1      ← max posisi aktif per "sektor" coin
+CORRELATION_ENABLED      = bool(STRATEGY_CFG.get("correlation_filter_enabled", True))
+CORRELATION_THRESHOLD    = float(STRATEGY_CFG.get("correlation_threshold", 0.85))
+CORRELATION_LOOKBACK     = int(STRATEGY_CFG.get("correlation_lookback", 50))
+CORRELATION_USE_ZSCORE   = bool(STRATEGY_CFG.get("correlation_use_zscore", True))
+CORRELATION_SECTOR_MAX   = int(STRATEGY_CFG.get("correlation_sector_max", 1))
+
+# Cheap symbol → sector mapping. Edit / extend in code or via CONFIG override.
+# Keys are uppercase base symbols, values are sector tags. Anything not listed
+# is treated as sector "alt".
+SECTOR_MAP_DEFAULT = {
+    "BTC": "majors", "ETH": "majors",
+    "BNB": "majors",
+    "SOL": "L1", "AVAX": "L1", "ADA": "L1", "DOT": "L1",
+    "ARB": "L2",  "OP": "L2",  "MATIC": "L2",
+    "LINK": "oracle",
+    "DOGE": "meme", "SHIB": "meme", "PEPE": "meme", "WIF": "meme",
+    "UNI": "defi", "AAVE": "defi", "CAKE": "defi", "CRV": "defi",
+    "FIL": "storage", "AR": "storage",
+}
+SECTOR_MAP = {**SECTOR_MAP_DEFAULT, **(STRATEGY_CFG.get("sector_map", {}) or {})}
+
+
+def _symbol_sector(symbol: str) -> str:
+    base = symbol.split("/")[0].upper()
+    return SECTOR_MAP.get(base, "alt")
 
 # ─── FIX #5: Candle Confirmation ──────────────────────────────────────────────
 # Tunggu satu candle close setelah pattern terbentuk sebelum entry.
@@ -326,6 +364,45 @@ def _check_candle_confirmation(symbol: str, pattern: str, side: str, df: pd.Data
         f"(prev_ts={prev_ts} → new_ts={last_bar_ts})"
     )
     return True
+
+
+def _step_ltf_confirmation(symbol: str, side: str) -> bool:
+    """
+    Fix L — Multi-step LTF (5m) confirmation.
+
+    After all gates pass on the entry TF, fetch the confirmation TF (default 5m)
+    and require that the *most recent closed bar* is in the trade direction.
+    This filters entries that look fine on 15m but are already mid-fade on 5m.
+
+    Returns True if the LTF confirms (or feature disabled). Returns False if
+    the LTF is in conflict — caller should reject the signal.
+    """
+    if not LTF_ENABLED:
+        return True
+    try:
+        df_ltf = client.fetch_ohlcv(symbol, CONFIRM_TF, limit=max(LTF_LOOKBACK + 5, 10))
+        if df_ltf is None or len(df_ltf) < LTF_LOOKBACK + 1:
+            logger.debug(f"[{symbol}] LTF data insufficient — fail-open")
+            return True
+        recent = df_ltf.iloc[-(LTF_LOOKBACK + 1):]
+        first_close = float(recent["close"].iloc[0])
+        last_close  = float(recent["close"].iloc[-1])
+        if not LTF_REQUIRE_CLOSE:
+            return True
+        if side == "Long" and last_close < first_close:
+            logger.debug(
+                f"[{symbol}] LTF reject Long: {first_close:.6g} → {last_close:.6g}"
+            )
+            return False
+        if side == "Short" and last_close > first_close:
+            logger.debug(
+                f"[{symbol}] LTF reject Short: {first_close:.6g} → {last_close:.6g}"
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.debug(f"[{symbol}] LTF confirm error {type(e).__name__}: {e} — fail-open")
+        return True
 
 
 def resolve_atr(df: pd.DataFrame) -> float:
@@ -447,22 +524,59 @@ def _step_technicals_and_pattern(
     df: pd.DataFrame,
     symbol: str,
     counters: dict,
-) -> "tuple[pd.DataFrame, str, str] | None":
-    """Step 5: Hitung technical indicators + deteksi pattern + lookup side."""
+) -> "tuple[pd.DataFrame, str, str, dict] | None":
+    """
+    Step 5: Hitung technical indicators + klasifikasi regime + deteksi pattern.
+
+    Routing (fix E + K):
+      - regime ANOMALY               → reject (flash event, skip)
+      - regime RANGE / SQUEEZE       → coba range-strategy dulu, fall through
+                                       ke chart-pattern hanya kalau tidak ada
+                                       (chart pattern di range akan auto-reject
+                                       lewat ADX gate di patterns.py)
+      - regime TREND_BULL / BEAR     → langsung chart pattern path
+    """
     df      = get_technicals(df)
-    pattern = find_pattern(df)
+    regime  = classify_regime(df)
 
-    if not pattern:
-        counters["no_pattern"] += 1
+    if regime["label"] == "ANOMALY" and REGIME_SKIP_ANOMALY:
+        counters["regime_anomaly"] += 1
+        logger.debug(f"[{symbol}] skip — regime ANOMALY: {regime['reason']}")
         return None
 
-    side = CONFIG["pattern_signals"].get(pattern)
-    if not side:
-        logger.warning(f"[{symbol}] pattern '{pattern}' tidak ada di pattern_signals config")
-        counters["no_pattern"] += 1
+    pattern = None
+    side    = None
+
+    if regime["label"] in ("RANGE", "SQUEEZE") and range_strategy_enabled():
+        rng_sig = find_range_signal(df, regime)
+        if rng_sig is not None:
+            pattern = rng_sig["pattern"]
+            side    = CONFIG["pattern_signals"].get(pattern) or rng_sig["side"]
+            logger.debug(
+                f"[{symbol}] range-mode signal: {pattern} {side} | {rng_sig['reason']}"
+            )
+
+    if pattern is None:
+        pattern = find_pattern(df)
+        if not pattern:
+            counters["no_pattern"] += 1
+            return None
+        side = CONFIG["pattern_signals"].get(pattern)
+        if not side:
+            logger.warning(f"[{symbol}] pattern '{pattern}' tidak ada di pattern_signals config")
+            counters["no_pattern"] += 1
+            return None
+
+    # Regime / side compatibility check (e.g. block Long in TREND_BEAR)
+    if not regime_allows(regime, side):
+        counters["regime_conflict"] += 1
+        logger.debug(
+            f"[{symbol}] skip — regime {regime['label']} blocks {side} "
+            f"({regime['reason']})"
+        )
         return None
 
-    return df, pattern, side
+    return df, pattern, side, regime
 
 
 def _step_mtf_pattern_confluence(
@@ -774,9 +888,33 @@ def _step_correlation_filter(
     if not active_syms:
         return None
 
+    # ── Sector group cap (fix I) ─────────────────────────────────────────────
+    cand_sector = _symbol_sector(symbol)
+    sector_count = sum(1 for s in active_syms if _symbol_sector(s) == cand_sector)
+    if cand_sector != "alt" and sector_count >= CORRELATION_SECTOR_MAX:
+        counters["correlation_reject"] += 1
+        logger.debug(
+            f"[{symbol}] skip — sector '{cand_sector}' already has {sector_count} "
+            f"active position(s), cap={CORRELATION_SECTOR_MAX}"
+        )
+        return f"sector_cap_{cand_sector}"
+
     returns_cand = df["close"].pct_change().dropna().iloc[-CORRELATION_LOOKBACK:]
     if len(returns_cand) < 20:
         return None   # data terlalu pendek untuk korelasi yang bermakna
+
+    # Rolling z-score is resistant to fat tails / outlier candles versus
+    # raw Pearson on returns (fix I). Sample correlation between standardised
+    # series equals Pearson on standardised inputs but with stable variance.
+    def _zscore(arr: np.ndarray) -> np.ndarray:
+        if not CORRELATION_USE_ZSCORE:
+            return arr
+        sd = np.std(arr)
+        if sd <= 0 or not np.isfinite(sd):
+            return arr
+        return (arr - np.mean(arr)) / sd
+
+    cand_z = _zscore(returns_cand.values)
 
     for active_sym in active_syms[:10]:    # batasi maks 10 cek agar tidak lambat
         try:
@@ -791,11 +929,13 @@ def _step_correlation_filter(
             if min_len < 20:
                 continue
 
-            corr_matrix = np.corrcoef(
-                returns_cand.values[-min_len:],
-                returns_active.values[-min_len:]
-            )
+            a = cand_z[-min_len:]
+            b = _zscore(returns_active.values[-min_len:])
+            corr_matrix = np.corrcoef(a, b)
             corr = float(corr_matrix[0, 1])
+
+            if not np.isfinite(corr):
+                continue
 
             if abs(corr) >= CORRELATION_THRESHOLD:
                 counters["correlation_reject"] += 1
@@ -847,7 +987,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
         pattern_data = _step_technicals_and_pattern(df, symbol, counters)
         if pattern_data is None:
             return None
-        df, pattern, side = pattern_data
+        df, pattern, side, regime = pattern_data
 
         step = "alignment_filters"
         if _step_alignment_filters(symbol, side, symbol_trend, btc_bias, counters):
@@ -871,6 +1011,12 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
         step = "candle_confirmation"
         if not _check_candle_confirmation(symbol, pattern, side, df):
             counters["candle_wait"] += 1
+            return None
+
+        # FIX L — Multi-step LTF confirmation (default 5m close in direction)
+        step = "ltf_confirmation"
+        if not _step_ltf_confirmation(symbol, side):
+            counters["ltf_reject"] += 1
             return None
 
         step = "score_filters"
@@ -942,14 +1088,21 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
 def is_active_hour() -> bool:
     """
     Kembalikan True jika jam UTC saat ini berada dalam window aktif.
-    Window dikonfigurasi via system.active_hours_utc: [start, end] (inklusif start, eksklusif end).
-    Default: [6, 22] → 06:00–22:00 UTC (sesi London + New York).
+
+    Gates (fix J):
+      • active_hours_utc [start, end]  inklusif start, eksklusif end (default 6–22 UTC)
+      • skip_weekends  : skip Sat/Sun ketika True
+      • skip_hours_utc : daftar jam UTC tambahan yang ditolak (mis. low-liquidity window)
     """
-    window   = CONFIG["system"].get("active_hours_utc", [6, 22])
-    start_h  = int(window[0])
-    end_h    = int(window[1])
-    current_h = datetime.utcnow().hour
-    return start_h <= current_h < end_h
+    now = datetime.utcnow()
+    if SKIP_WEEKENDS and now.weekday() >= 5:        # 5 = Sat, 6 = Sun
+        return False
+    if SKIP_HOURS_UTC and now.hour in SKIP_HOURS_UTC:
+        return False
+    window  = CONFIG["system"].get("active_hours_utc", [6, 22])
+    start_h = int(window[0])
+    end_h   = int(window[1])
+    return start_h <= now.hour < end_h
 
 
 def _account_balance_for_daily_guard() -> float:

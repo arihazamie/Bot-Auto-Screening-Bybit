@@ -16,25 +16,31 @@
     "check_interval_minutes": 15,
     "entry_timeframe": "15m",
     "trend_timeframe": "1h",
+    "confirm_timeframe": "5m",
     "min_candles_analysis": 150,
     "watchlist_top_n": 100,
-    "active_hours_utc": [6, 22]
+    "active_hours_utc": [6, 22],
+    "skip_weekends": true,
+    "skip_hours_utc": []
   },
 
   "risk": {
-    "use_max_leverage": true,
-    "target_leverage": 25,
+    "use_max_leverage": false,
+    "target_leverage": 10,
     "max_leverage_cap": 20,
     "risk_percent": 0.01,
-    "max_positions": 3,
-    "max_daily_loss_pct": 0.01,
-    "daily_profit_target_pct": 0.015,
-    "max_daily_trades": 3,
+    "max_positions": 2,
+    "max_daily_loss_pct": 0.008,
+    "daily_profit_target_pct": 0.012,
+    "max_daily_trades": 2,
     "pending_expire_hours": 3,
     "tp_split": [0.4, 0.3, 0.3],
     "atr_sl_multiplier": 1.5,
     "atr_sl_length": 14,
-    "paper_balance": 100.0
+    "paper_balance": 100.0,
+    "paper_slippage_bps": 5,
+    "paper_spread_bps": 2,
+    "paper_max_spread_bps": 50
   },
 
   "setup": {
@@ -49,22 +55,58 @@
   "strategy": {
     "min_tech_score": 3,
     "min_quant_score": 3,
-    "min_smc_score": 2,
+    "min_smc_score": 4,
     "min_deriv_score": 2,
     "max_entry_drift_pct": 0.03,
-    "risk_reward_min": 2.5,
-    "min_adx": 15,
-    "min_tp1_distance_pct": 0.002,
-    "min_atr_pct": 0.001,
-    "max_atr_pct": 0.03,
-    "require_sl_beyond_swing": false,
-    "sl_swing_buffer_atr": 0,
-    "btc_bias_adx_min": 20,
+    "risk_reward_min": 3.0,
+    "min_adx": 22,
+    "min_tp1_distance_pct": 0.004,
+    "min_atr_pct": 0.003,
+    "max_atr_pct": 0.015,
+    "require_sl_beyond_swing": true,
+    "sl_swing_buffer_atr": 0.3,
+    "btc_bias_adx_min": 25,
     "candle_confirmation": true,
     "limit_order_offset_pct": 0.002,
     "min_sl_pct": 0.005,
     "max_loss_per_trade_pct": 0.01,
-    "mtf_confluence_enabled": true
+    "mtf_confluence_enabled": true,
+    "correlation_filter_enabled": true,
+    "correlation_threshold": 0.7,
+    "correlation_lookback": 50,
+    "correlation_use_zscore": true,
+    "correlation_sector_max": 1,
+    "max_funding_long": 0.0008,
+    "min_funding_short": -0.0008,
+    "cool_funding_abs": 0.0002,
+    "bonus_funding_min": 0.0003,
+    "cvd_lookback": 30,
+    "cvd_min_adx": 20,
+    "smc_min_displacement_body_pct": 0.006,
+    "smc_bos_min_adx": 18,
+    "smc_sweep_base_tolerance": 0.002,
+    "smc_premdisc_window": 80,
+    "regime": {
+      "trend_adx": 22,
+      "anomaly_atr_pct": 0.025,
+      "squeeze_bbw_pct": 0.20,
+      "range_bbw_pct": 0.50,
+      "lookback": 120,
+      "skip_when_anomaly": true
+    },
+    "range": {
+      "enabled": true,
+      "bb_length": 20,
+      "bb_std": 2.0,
+      "rsi_oversold": 30,
+      "rsi_overbought": 70,
+      "squeeze_breakout_volume_mult": 1.5
+    },
+    "ltf_confirmation": {
+      "enabled": true,
+      "lookback_bars": 3,
+      "require_close_in_direction": true
+    }
   },
 
   "indicators": {
@@ -73,6 +115,10 @@
 
   "patterns": {
     "tolerance": 0.015,
+    "volume_multiplier": 1.8,
+    "min_pattern_adx": 20,
+    "min_double_gap_bars": 5,
+    "min_double_reject_atr": 0.4,
     "double_top": true,
     "double_bottom": true,
     "bull_flag": true,
@@ -89,6 +135,13 @@
     "bear_flag": "Short",
     "ascending_triangle": "Long",
     "descending_triangle": "Short",
-    "bullish_rectangle": "Long"
+    "bullish_rectangle": "Long",
+
+    "bb_revert_long": "Long",
+    "bb_revert_short": "Short",
+    "failed_breakout_long": "Long",
+    "failed_breakout_short": "Short",
+    "squeeze_breakout_long": "Long",
+    "squeeze_breakout_short": "Short"
   }
 }
