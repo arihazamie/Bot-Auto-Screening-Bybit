@@ -298,15 +298,16 @@ def _heuristic_fallback(position: dict, market_ctx: dict, reason: str) -> dict:
     elif reg1h == "TREND_BEAR" and reg15 in ("TREND_BEAR", "SQUEEZE"):
         bias = "bearish" if side == "Long" else "bullish"
 
-    # TP heuristic: kalau pnl >= 1% dan regime tidak mendukung, partial profit
+    # TP heuristic — urutan dibalik supaya threshold PnL tinggi tidak ter-shadow
+    # oleh threshold yang lebih rendah.
     tp_action = "hold"
     tp_close_pct = 0
-    if pnl_pct >= 1.0 and bias in ("neutral", "bearish"):
-        tp_action = "take_partial_now"
-        tp_close_pct = 25
-    elif pnl_pct >= 2.0:
+    if pnl_pct >= 2.0:
         tp_action = "scale_out_soon"
         tp_close_pct = 30
+    elif pnl_pct >= 1.0 and bias in ("neutral", "bearish"):
+        tp_action = "take_partial_now"
+        tp_close_pct = 25
 
     # SL heuristic: hanya geser ke BE jika sudah +0.8% (Long) atau -0.8% (Short)
     sl_action = "hold"

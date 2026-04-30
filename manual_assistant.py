@@ -182,7 +182,11 @@ def run(args: argparse.Namespace, logger: logging.Logger) -> int:
 
         if args.once:
             return 0
-        time.sleep(poll_sec)
+        try:
+            time.sleep(poll_sec)
+        except KeyboardInterrupt:
+            logger.info("🛑 Stopped by user.")
+            return 0
 
 
 def _poll_once(
