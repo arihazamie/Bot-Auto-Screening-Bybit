@@ -23,7 +23,8 @@ A Python trading bot that automatically scans Bybit USDT-Perpetual futures, gene
 10. [Troubleshooting](#troubleshooting)
 11. [Updating the bot](#updating-the-bot)
 12. [Project layout](#project-layout)
-13. [Disclaimer](#disclaimer)
+13. [Manual position assistant (read-only)](#manual-position-assistant-read-only)
+14. [Disclaimer](#disclaimer)
 
 ---
 
@@ -380,6 +381,7 @@ If a new release adds new config keys, the bot will tell you on startup. You can
 .
 ├── main.py                       # entry point — scheduler & scan loop
 ├── auto_trades.py                # real-order execution (auto_trade=true)
+├── manual_assistant.py           # READ-ONLY assistant for manual positions (TP/SL advice)
 ├── config.example.json           # config template
 ├── requirements.txt
 └── modules/
@@ -399,8 +401,89 @@ If a new release adds new config keys, the bot will tell you on startup. You can
     ├── paper_runner.py           # paper runner daemon (ingest/execute/monitor)
     ├── telegram_bot.py           # alerts, dashboard, scan completion
     ├── telegram_commands.py      # /status, /pause, /resume, /report ...
-    └── notifier.py               # send/send_reply with retry-aware Telegram
+    ├── notifier.py               # send/send_reply with retry-aware Telegram
+    ├── secrets_loader.py         # env-var-first loader for Bybit/OpenRouter keys
+    ├── manual_position_reader.py # READ-ONLY pybit position poller + diff
+    ├── manual_market_context.py  # per-symbol regime/RSI/EMA/funding/CVD snapshot
+    ├── openrouter_advisor.py     # OpenRouter (LLM) TP/SL advisory + heuristic fallback
+    └── manual_notifier.py        # Telegram formatter + dedup for manual assistant
 ```
+
+---
+
+## Manual position assistant (read-only)
+
+A **separate, read-only** assistant that watches positions you opened **manually** in Bybit, asks an LLM (via OpenRouter) for TP/SL advice based on real-time market context, and sends the advice to your Telegram. It **never** places, modifies, or cancels any orders — your manual trades are untouched.
+
+### What it does
+
+1. Polls your open Bybit USDT-Perp positions every N seconds via `pybit` (READ-ONLY).
+2. For each position, builds a small market-context snapshot (regime 15m+1h, ADX, RSI, EMA alignment, funding rate, CVD slope) using the same indicator modules the screener already uses.
+3. Sends position + context to OpenRouter with a strict JSON schema asking for: bias, TP recommendation (take-partial / hold / scale-out + suggested %), SL recommendation (move-to-BE / move-to-price / tighten / hold).
+4. Validates the response, then formats and sends a Telegram message — with **smart dedup**: only re-notifies when the bias or recommended action changes, plus a heartbeat every N minutes.
+5. Detects manual closes / partial closes via position-snapshot diff and sends a summary.
+
+If OpenRouter is unreachable or its API key isn't configured, the assistant falls back to a conservative heuristic (regime + PnL based) so you still get useful notifications.
+
+### Setup
+
+```bash
+# 1. (Recommended) generate a Bybit API key with permission "Read" only — no Trade, no Withdraw.
+#    The assistant only needs to read positions.
+export BYBIT_API_KEY="..."
+export BYBIT_API_SECRET="..."
+
+# 2. (Optional) set up OpenRouter for AI advice. Without this, the assistant uses a heuristic.
+export OPENROUTER_API_KEY="..."
+
+# 3. Enable in config.json (default is OFF):
+#    "manual_assistant": { "enabled": true, "dry_run": true, ... }
+```
+
+Secrets are also accepted via `config.json` keys (`api.bybit_key`, `api.bybit_secret`, `api.openrouter_api_key`) but env vars take priority and are never logged.
+
+### Run
+
+```bash
+# Offline self-test — no Bybit/OpenRouter/Telegram calls, just prints simulated messages.
+python manual_assistant.py --simulate
+
+# Dry-run against real Bybit data, but log "🟡 SIMULATED" instead of sending to Telegram.
+python manual_assistant.py --dry-run
+
+# One full poll cycle then exit (good for cron).
+python manual_assistant.py --once
+
+# Live (set "enabled": true in config.json first).
+python manual_assistant.py
+```
+
+Logs are written to `data/manual_assistant.log` (rotating, 5MB × 3).
+
+### Config knobs
+
+```jsonc
+"manual_assistant": {
+  "enabled": false,            // master switch
+  "dry_run": true,             // log simulated messages instead of sending Telegram
+  "poll_interval_sec": 10,     // how often to poll Bybit positions
+  "heartbeat_minutes": 30,     // re-send advice this often even if nothing changed
+  "tf_entry": "15m",
+  "tf_trend": "1h",
+  "openrouter": {
+    "enabled": true,
+    "model": "openrouter/auto",
+    "cache_seconds": 60,       // dedup identical LLM calls within this window
+    "timeout_sec": 20
+  }
+}
+```
+
+### Safety guarantees
+
+- The code path imports `pybit.unified_trading.HTTP` and only ever calls `get_positions`. There is no `place_order` / `set_trading_stop` / `cancel_order` anywhere in this assistant — by design.
+- Existing screener / auto-trader logic is **not** touched.
+- Default config ships with `enabled: false` and `dry_run: true` — opt-in for live notifications.
 
 ---
 
