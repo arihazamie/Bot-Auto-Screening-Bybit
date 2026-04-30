@@ -203,6 +203,13 @@ def _poll_once(
     from modules.manual_market_context import build_context
 
     positions = reader.fetch_open_positions()
+    if positions is None:
+        # API call failed (network/auth/retCode!=0). Preserve prev_state and skip
+        # diff — kalau kita pass [] ke diff, semua posisi tracked akan ditandai
+        # "closed" → spam notif palsu setiap kali API hiccup.
+        logger.warning("Bybit get_positions failed; keeping previous state and skipping diff.")
+        return prev_state
+
     diff = reader.diff(prev_state, positions)
 
     # 1. Closed manual → notify + drop state

@@ -292,20 +292,29 @@ def _heuristic_fallback(position: dict, market_ctx: dict, reason: str) -> dict:
     reg1h   = (market_ctx.get("regime_1h")  or {}).get("label", "UNKNOWN")
     rsi15   = float(market_ctx.get("rsi_15m", 50.0))
 
+    # Bias bersifat MARKET-DIRECTIONAL (bukan relatif posisi), supaya konsisten
+    # dengan output schema LLM. TP/SL heuristic di bawah memperhitungkan side.
     bias = "neutral"
     if reg1h == "TREND_BULL" and reg15 in ("TREND_BULL", "SQUEEZE"):
-        bias = "bullish" if side == "Long" else "bearish"
+        bias = "bullish"
     elif reg1h == "TREND_BEAR" and reg15 in ("TREND_BEAR", "SQUEEZE"):
-        bias = "bearish" if side == "Long" else "bullish"
+        bias = "bearish"
+
+    # Side-aware: regime "melawan" posisi → biasa-bias TP lebih agresif.
+    bias_against_position = (
+        (side == "Long"  and bias == "bearish") or
+        (side == "Short" and bias == "bullish")
+    )
 
     # TP heuristic — urutan dibalik supaya threshold PnL tinggi tidak ter-shadow
-    # oleh threshold yang lebih rendah.
+    # oleh threshold yang lebih rendah. Bias di sini market-directional, jadi
+    # pakai `bias_against_position` supaya logika sama untuk Long & Short.
     tp_action = "hold"
     tp_close_pct = 0
     if pnl_pct >= 2.0:
         tp_action = "scale_out_soon"
         tp_close_pct = 30
-    elif pnl_pct >= 1.0 and bias in ("neutral", "bearish"):
+    elif pnl_pct >= 1.0 and (bias == "neutral" or bias_against_position):
         tp_action = "take_partial_now"
         tp_close_pct = 25
 

@@ -138,10 +138,17 @@ class ManualPositionReader:
     # ────────────────────────────────────────────────────────────
     # Public API
     # ────────────────────────────────────────────────────────────
-    def fetch_open_positions(self) -> list[ManualPosition]:
+    def fetch_open_positions(self) -> list[ManualPosition] | None:
         """
         Return semua posisi terbuka (size > 0). Untuk Bybit Unified, harus pakai
         `settleCoin=USDT` untuk linear perpetuals supaya tidak butuh symbol filter.
+
+        Return value:
+          • list[ManualPosition] (mungkin kosong) → call sukses, list adalah
+            snapshot lengkap posisi terbuka.
+          • None                                  → call GAGAL (network/auth/
+            retCode!=0). Caller WAJIB skip diff supaya tidak generate notifikasi
+            "POSITION CLOSED" palsu untuk posisi yang sebenarnya masih terbuka.
 
         READ-ONLY: hanya panggil GET /v5/position/list.
         """
@@ -150,11 +157,11 @@ class ManualPositionReader:
             resp = client.get_positions(category=self._category, settleCoin="USDT")
         except Exception as e:
             logger.error(f"get_positions gagal: {type(e).__name__}: {e}")
-            return []
+            return None
 
         if not isinstance(resp, dict) or resp.get("retCode", -1) != 0:
             logger.error(f"get_positions retCode != 0: {resp}")
-            return []
+            return None
 
         rows = resp.get("result", {}).get("list", []) or []
         out: list[ManualPosition] = []
