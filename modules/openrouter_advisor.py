@@ -122,13 +122,17 @@ class OpenRouterAdvisor:
     # Cache
     # ────────────────────────────────────────────────────────────
     def _cache_key(self, position: dict, market_ctx: dict) -> str:
-        # Kombinasi yang stabil per posisi + bucket waktu N detik.
+        # Cache dimaksudkan menahan LLM call selama N detik per posisi. Kuncinya
+        # HARUS stabil dalam window itu, jadi field volatile (mark_price) sengaja
+        # tidak diikutkan — kalau tidak, key berubah tiap poll dan cache tidak
+        # pernah hit. Time-bucket sudah cukup untuk membatasi rate.
         bucket = int(time.time() // max(1, self._cache_secs))
+        regime_15m = (market_ctx.get("regime_15m") or {}).get("label", "")
+        regime_1h  = (market_ctx.get("regime_1h")  or {}).get("label", "")
         return (
             f"{position.get('symbol','')}|{position.get('side','')}|"
-            f"{round(float(position.get('mark_price', 0) or 0), 4)}|"
-            f"{market_ctx.get('regime_15m', {}).get('label', '')}|"
-            f"{bucket}"
+            f"{position.get('position_idx', 0)}|"
+            f"{regime_15m}|{regime_1h}|{bucket}"
         )
 
     def _cache_get(self, key: str) -> dict | None:
