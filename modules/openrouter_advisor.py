@@ -127,12 +127,12 @@ class OpenRouterAdvisor:
         # tidak diikutkan — kalau tidak, key berubah tiap poll dan cache tidak
         # pernah hit. Time-bucket sudah cukup untuk membatasi rate.
         bucket = int(time.time() // max(1, self._cache_secs))
-        regime_15m = (market_ctx.get("regime_15m") or {}).get("label", "")
-        regime_1h  = (market_ctx.get("regime_1h")  or {}).get("label", "")
+        regime_entry = (market_ctx.get("regime_entry") or {}).get("label", "")
+        regime_trend = (market_ctx.get("regime_trend") or {}).get("label", "")
         return (
             f"{position.get('symbol','')}|{position.get('side','')}|"
             f"{position.get('position_idx', 0)}|"
-            f"{regime_15m}|{regime_1h}|{bucket}"
+            f"{regime_entry}|{regime_trend}|{bucket}"
         )
 
     def _cache_get(self, key: str) -> dict | None:
@@ -290,18 +290,18 @@ def _heuristic_fallback(position: dict, market_ctx: dict, reason: str) -> dict:
     Selalu konservatif: tidak pernah merekomendasikan move SL ke BE kecuali
     posisi sudah profit.
     """
-    side    = position.get("side", "Long")
-    pnl_pct = float(position.get("unrealised_pnl_pct", 0.0))
-    reg15   = (market_ctx.get("regime_15m") or {}).get("label", "UNKNOWN")
-    reg1h   = (market_ctx.get("regime_1h")  or {}).get("label", "UNKNOWN")
-    rsi15   = float(market_ctx.get("rsi_15m", 50.0))
+    side     = position.get("side", "Long")
+    pnl_pct  = float(position.get("unrealised_pnl_pct", 0.0))
+    reg_e    = (market_ctx.get("regime_entry") or {}).get("label", "UNKNOWN")
+    reg_t    = (market_ctx.get("regime_trend") or {}).get("label", "UNKNOWN")
+    rsi_e    = float(market_ctx.get("rsi_entry", 50.0))
 
     # Bias bersifat MARKET-DIRECTIONAL (bukan relatif posisi), supaya konsisten
     # dengan output schema LLM. TP/SL heuristic di bawah memperhitungkan side.
     bias = "neutral"
-    if reg1h == "TREND_BULL" and reg15 in ("TREND_BULL", "SQUEEZE"):
+    if reg_t == "TREND_BULL" and reg_e in ("TREND_BULL", "SQUEEZE"):
         bias = "bullish"
-    elif reg1h == "TREND_BEAR" and reg15 in ("TREND_BEAR", "SQUEEZE"):
+    elif reg_t == "TREND_BEAR" and reg_e in ("TREND_BEAR", "SQUEEZE"):
         bias = "bearish"
 
     # Side-aware: regime "melawan" posisi → biasa-bias TP lebih agresif.
@@ -335,14 +335,14 @@ def _heuristic_fallback(position: dict, market_ctx: dict, reason: str) -> dict:
             "action": tp_action,
             "suggested_close_pct": tp_close_pct,
             "suggested_price": 0.0,
-            "reason": f"heuristic ({reason}); pnl={pnl_pct:+.2f}% reg={reg1h}/{reg15} rsi15={rsi15:.0f}",
+            "reason": f"heuristic ({reason}); pnl={pnl_pct:+.2f}% reg={reg_t}/{reg_e} rsi={rsi_e:.0f}",
         },
         "sl_recommendation": {
             "action": sl_action,
             "suggested_sl": sl_price,
             "reason": f"heuristic ({reason}); pnl={pnl_pct:+.2f}%",
         },
-        "overall": f"Heuristic advice ({reason}). Bias {bias} based on regime {reg1h}/{reg15}.",
+        "overall": f"Heuristic advice ({reason}). Bias {bias} based on regime {reg_t}/{reg_e}.",
         "_source": "heuristic",
         "_cached": False,
     }

@@ -256,6 +256,7 @@ def _position_to_dict(pos) -> dict:
         "liq_price":           pos.liq_price,
         "unrealised_pnl":      pos.unrealised_pnl,
         "unrealised_pnl_pct":  pos.unrealised_pnl_pct,
+        "position_idx":        pos.position_idx,
     }
 
 

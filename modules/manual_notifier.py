@@ -78,15 +78,23 @@ def _sl_action_label(action: str) -> str:
 
 
 def _regime_line(ctx: dict) -> str:
-    r15 = (ctx.get("regime_15m") or {})
-    r1h = (ctx.get("regime_1h")  or {})
+    # Label TF dibaca dari ctx supaya konsisten dengan tf_entry/tf_trend yang
+    # user konfigurasi (tidak hardcode 15m/1h).
+    tf_entry = ctx.get("tf_entry", "entry")
+    tf_trend = ctx.get("tf_trend", "trend")
+    r_entry = (ctx.get("regime_entry") or {})
+    r_trend = (ctx.get("regime_trend") or {})
     pieces = []
-    if r1h.get("label"):
-        pieces.append(f"1h <code>{r1h['label']}</code> ADX <code>{r1h.get('adx', 0):.1f}</code>")
-    if r15.get("label"):
-        pieces.append(f"15m <code>{r15['label']}</code> ADX <code>{r15.get('adx', 0):.1f}</code>")
-    if "rsi_15m" in ctx:
-        pieces.append(f"RSI15 <code>{ctx['rsi_15m']:.0f}</code>")
+    if r_trend.get("label"):
+        pieces.append(
+            f"{tf_trend} <code>{r_trend['label']}</code> ADX <code>{r_trend.get('adx', 0):.1f}</code>"
+        )
+    if r_entry.get("label"):
+        pieces.append(
+            f"{tf_entry} <code>{r_entry['label']}</code> ADX <code>{r_entry.get('adx', 0):.1f}</code>"
+        )
+    if "rsi_entry" in ctx:
+        pieces.append(f"RSI({tf_entry}) <code>{ctx['rsi_entry']:.0f}</code>")
     if "funding_rate" in ctx:
         pieces.append(f"funding <code>{ctx['funding_rate']*100:+.4f}%</code>")
     return " · ".join(pieces) if pieces else "—"

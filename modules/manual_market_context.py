@@ -7,18 +7,21 @@ output yang dikirim ke OpenRouter konsisten dengan logika screening utama.
 Output (dict) sengaja kecil — supaya prompt LLM ringkas + cost rendah:
   {
     "symbol": "BTCUSDT",
-    "tf_entry":   "15m",
-    "tf_trend":   "1h",
-    "regime_15m": {"label", "adx", "atr_pct", "ema_align", "reason"},
-    "regime_1h":  {...},
-    "rsi_15m":    float,
-    "rsi_1h":     float,
-    "ema_align_1h": int,
-    "funding_rate": float,
-    "cvd_slope":  float,
-    "price_slope_15m": float,
-    "last_close": float,
+    "tf_entry":     "15m",            # tf yang user konfigurasi
+    "tf_trend":     "1h",
+    "regime_entry": {"label", "adx", "atr_pct", "ema_align", "reason"},
+    "regime_trend": {...},
+    "rsi_entry":    float,
+    "rsi_trend":    float,
+    "ema_align_trend": int,
+    "funding_rate":    float,
+    "cvd_slope_entry": float,
+    "price_slope_entry": float,
+    "last_close":   float,
   }
+
+Key-key di atas timeframe-AGNOSTIC supaya konsumen (notifier, advisor) bisa
+membaca `tf_entry` / `tf_trend` untuk display label tanpa hardcode '15m'/'1h'.
 
 Tidak pernah memutuskan trade — hanya kumpulkan fakta numerik.
 """
@@ -124,37 +127,37 @@ def build_context(
         out["degraded"] = True
         return out
 
-    # ── Regime per TF ────────────────────────────────────────────────────────
+    # ── Regime per TF (key timeframe-agnostic; tf-nya tersimpan di tf_entry/tf_trend) ──
     try:
-        out["regime_15m"] = _slim_regime(classify_regime(df_entry))
+        out["regime_entry"] = _slim_regime(classify_regime(df_entry))
     except Exception as e:
-        out["regime_15m"] = {"label": "UNKNOWN", "reason": str(type(e).__name__)}
-        out["errors"].append(f"regime_15m: {type(e).__name__}")
+        out["regime_entry"] = {"label": "UNKNOWN", "reason": str(type(e).__name__)}
+        out["errors"].append(f"regime_entry: {type(e).__name__}")
 
     try:
-        out["regime_1h"] = _slim_regime(classify_regime(df_trend))
+        out["regime_trend"] = _slim_regime(classify_regime(df_trend))
     except Exception as e:
-        out["regime_1h"] = {"label": "UNKNOWN", "reason": str(type(e).__name__)}
-        out["errors"].append(f"regime_1h: {type(e).__name__}")
+        out["regime_trend"] = {"label": "UNKNOWN", "reason": str(type(e).__name__)}
+        out["errors"].append(f"regime_trend: {type(e).__name__}")
 
     # ── Indicators ────────────────────────────────────────────────────────────
-    out["rsi_15m"]      = _rsi_last(df_entry["close"])
-    out["rsi_1h"]       = _rsi_last(df_trend["close"])
-    out["ema_align_1h"] = _ema_align(df_trend["close"])
-    out["last_close"]   = _safe_last(df_entry["close"])
+    out["rsi_entry"]       = _rsi_last(df_entry["close"])
+    out["rsi_trend"]       = _rsi_last(df_trend["close"])
+    out["ema_align_trend"] = _ema_align(df_trend["close"])
+    out["last_close"]      = _safe_last(df_entry["close"])
 
-    # Price slope 15m (last 30 closes) — gives advisor a numeric trend hint.
+    # Price slope (entry TF, last 30 closes) — gives advisor a numeric trend hint.
     try:
-        out["price_slope_15m"] = _slope(df_entry["close"].iloc[-30:].values)
+        out["price_slope_entry"] = _slope(df_entry["close"].iloc[-30:].values)
     except Exception:
-        out["price_slope_15m"] = 0.0
+        out["price_slope_entry"] = 0.0
 
     # CVD slope (proxy untuk pressure direction). Pakai persamaan sama dengan
     # modules.derivatives, tapi inline biar tidak butuh ticker info.
     try:
-        out["cvd_slope_15m"] = _cvd_slope(df_entry, lookback=30)
+        out["cvd_slope_entry"] = _cvd_slope(df_entry, lookback=30)
     except Exception as e:
-        out["cvd_slope_15m"] = 0.0
+        out["cvd_slope_entry"] = 0.0
         out["errors"].append(f"cvd: {type(e).__name__}")
 
     # Funding rate — opsional, butuh ticker. Pakai bybit_client.fetch_ticker.
