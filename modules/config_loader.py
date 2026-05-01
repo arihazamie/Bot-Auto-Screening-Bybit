@@ -12,7 +12,6 @@ Semua konfigurasi (termasuk API keys) diambil dari config.json.
 Key wajib:
   - api.telegram_bot_token
   - api.telegram_chat_id
-  - auto_trade
 """
 
 import json
@@ -25,7 +24,6 @@ import requests
 REQUIRED_KEYS = [
     ("api.telegram_bot_token", lambda c: c.get("api", {}).get("telegram_bot_token", "")),
     ("api.telegram_chat_id",   lambda c: c.get("api", {}).get("telegram_chat_id",   "")),
-    ("auto_trade",             lambda c: c.get("auto_trade", None)),
 ]
 
 CONFIG_PATH = "config.json"
@@ -70,8 +68,7 @@ def load_config() -> dict:
             f"  cp config.example.json config.json\n\n"
             f"Lalu isi nilai yang diperlukan, terutama:\n"
             f"  - api.telegram_bot_token\n"
-            f"  - api.telegram_chat_id\n"
-            f"  - auto_trade"
+            f"  - api.telegram_chat_id"
         )
 
     # ── 2. Parse JSON ─────────────────────────────────────────────────────────
@@ -124,8 +121,8 @@ def load_config() -> dict:
         risk_errors.append("  - risk.max_positions: harus integer ≥ 1")
 
     target_leverage = risk.get("target_leverage")
-    if not isinstance(target_leverage, int) or target_leverage < 1:
-        risk_errors.append("  - risk.target_leverage: harus integer ≥ 1")
+    if target_leverage is not None and (not isinstance(target_leverage, int) or target_leverage < 1):
+        risk_errors.append("  - risk.target_leverage: harus integer ≥ 1 (paper sizing fallback)")
 
     max_leverage_cap = risk.get("max_leverage_cap")
     if max_leverage_cap is not None:

@@ -77,7 +77,6 @@ logger = logging.getLogger("Main")
 # ─────────────────────────────────────────────────────────────────────────────
 # Mode & Config
 # ─────────────────────────────────────────────────────────────────────────────
-AUTO_TRADE_ENABLED = CONFIG.get("auto_trade", False)
 DEBUG_MODE         = CONFIG.get("debug", False)
 RISK_CFG           = CONFIG.get("risk", {})
 DAILY_PROFIT_TARGET = RISK_CFG.get("daily_profit_target_pct", 0.015)
@@ -87,7 +86,7 @@ MAX_DAILY_TRADES     = RISK_CFG.get("max_daily_trades", 3)
 print("=" * 60)
 print("🤖 Bybit Screening Bot v8")
 print("=" * 60)
-print(f"   Mode    : {'AUTO TRADE 🤖' if AUTO_TRADE_ENABLED else 'PAPER TRADE 📋 (signal + simulasi)'}")
+print(f"   Mode    : SIGNAL ONLY 📡 (screening + paper portfolio tracker)")
 print(f"   Debug   : {'ON 🔍' if DEBUG_MODE else 'OFF (set \"debug\": true di config.json untuk verbose)'}")
 print(f"   Env     : {CONFIG.get('env', 'PROD')}")
 print("=" * 60)
@@ -112,7 +111,7 @@ REGIME_SKIP_ANOMALY  = bool(_REGIME_CFG.get("skip_when_anomaly", True))
 # ─────────────────────────────────────────────────────────────────────────────
 # Exchange client (singleton)
 # ─────────────────────────────────────────────────────────────────────────────
-client = BybitClient(debug=DEBUG_MODE, auto_trade=AUTO_TRADE_ENABLED)
+client = BybitClient(debug=DEBUG_MODE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX: Bot startup timestamp — dipakai oleh heartbeat untuk hitung uptime
@@ -1122,14 +1121,7 @@ def is_active_hour() -> bool:
 
 
 def _account_balance_for_daily_guard() -> float:
-    if not AUTO_TRADE_ENABLED:
-        return get_paper_balance()
-    try:
-        balance_info = client.fetch_balance()
-        return float(balance_info["total"]["USDT"])
-    except Exception as e:
-        logger.debug(f"daily guard balance fetch failed: {e}")
-        return 0.0
+    return get_paper_balance()
 
 
 def daily_entry_limit_status() -> tuple[bool, str, int]:
@@ -1171,8 +1163,7 @@ def scan():
         return
 
     start_time = time.time()
-    mode_label = "AUTO TRADE 🤖" if AUTO_TRADE_ENABLED else "SIGNAL ONLY 📡"
-    logger.info(f"🔭 Scan dimulai | Mode: {mode_label}")
+    logger.info("🔭 Scan dimulai | Mode: SIGNAL ONLY 📡")
 
     blocked, reason, max_new_signals = daily_entry_limit_status()
     if blocked:
@@ -1217,15 +1208,14 @@ def scan():
                     if signal_count >= max_new_signals:
                         counters["daily_trade_limit"] += 1
                         continue
-                    # ✅ send_alert now returns Telegram message_id (int) on success, None on failure
-                    tg_msg_id = send_alert(res, auto_trade=AUTO_TRADE_ENABLED)
+                    # send_alert returns Telegram message_id (int) on success, None on failure
+                    tg_msg_id = send_alert(res)
                     if tg_msg_id:
                         signal_count += 1
-                        # Simpan ke DB di KEDUA mode agar paper_runner bisa ingest
-                        # ✅ Teruskan telegram_msg_id agar paper_runner bisa reply ke pesan asli
+                        # Save to DB so paper_runner can ingest and track virtual PnL.
+                        # telegram_msg_id allows paper_runner to reply to the original alert.
                         save_signal_to_db(res, telegram_msg_id=tg_msg_id)
-                        mode_tag = "🤖 real" if AUTO_TRADE_ENABLED else "📋 paper"
-                        logger.info(f"   {mode_tag} signal queued: {res['Symbol']} {res['Side']} [{res['Timeframe']}]")
+                        logger.info(f"   📡 signal queued: {res['Symbol']} {res['Side']} [{res['Timeframe']}]")
 
     except Exception as e:
         logger.error(f"Scan Error: {type(e).__name__}: {e}", exc_info=True)
@@ -1292,17 +1282,12 @@ def send_heartbeat():
         uptime_m      = int((uptime_sec % 3600) // 60)
         trades_today  = get_trades_today()
         trade_count   = len(trades_today)
-        mode_label    = "AUTO 🤖" if AUTO_TRADE_ENABLED else "PAPER 📋"
+        mode_label    = "SIGNAL ONLY 📡"
 
-        # Balance
+        # Balance (paper portfolio tracker)
         try:
-            if AUTO_TRADE_ENABLED:
-                bal_info = client.fetch_balance()
-                balance  = float(bal_info["total"]["USDT"])
-                bal_str  = f"${balance:.2f} USDT"
-            else:
-                balance = get_paper_balance()
-                bal_str = f"${balance:.2f} (paper)"
+            balance = get_paper_balance()
+            bal_str = f"${balance:.2f} (paper)"
         except Exception:
             bal_str = "N/A"
 
@@ -1345,13 +1330,12 @@ if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
     init_db()
 
-    # ── Auto-start Paper Trader jika mode SIGNAL ONLY ─────────────
-    if not AUTO_TRADE_ENABLED:
-        print()
-        print("📋 Paper Trade Runner — AUTO START")
-        print("   (auto_trade=false → paper trader berjalan di background thread)")
-        print()
-        start_paper_runner()
+    # ── Auto-start Paper Portfolio Tracker (always on in signal-only mode) ──
+    print()
+    print("📋 Paper Portfolio Tracker — AUTO START")
+    print("   (virtual PnL tracking; no real orders are placed)")
+    print()
+    start_paper_runner()
 
     # ── Start Telegram Command Listener ───────────────────────────
     print("🎧 Telegram Command Listener — AUTO START")
@@ -1359,13 +1343,12 @@ if __name__ == "__main__":
     print()
     start_command_listener()
 
-    # ── Cek koneksi Bybit sebelum mulai ─────────────────────────
-    ok = client.health_check(auto_trade=AUTO_TRADE_ENABLED)
+    # ── Cek koneksi Bybit (public market data only) ─────────────
+    ok = client.health_check()
     if not ok:
         print("\n❌ Health check gagal — pastikan:")
         print("   1. Koneksi internet aktif")
         print("   2. Bybit API tidak diblokir (coba VPN jika perlu)")
-        print("   3. bybit_key & bybit_secret di config.json benar")
         print("   Bot tetap berjalan, tapi sinyal mungkin tidak keluar.\n")
 
     # ── Refresh watchlist saat startup ──────────────────────────

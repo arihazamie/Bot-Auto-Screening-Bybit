@@ -106,7 +106,7 @@ def _tg(method, token, _retry=5, **kwargs):
 
 # ─── SIGNAL ALERT ─────────────────────────────────────────────────────────────
 
-def send_alert(data, auto_trade: bool = False):
+def send_alert(data):
     """
     Kirim signal alert ke Telegram.
     Returns message_id (int) on success, None on failure.
@@ -361,7 +361,7 @@ def run_fast_update():
 
 # ─── SCAN COMPLETION ──────────────────────────────────────────────────────────
 
-def send_scan_completion(count, duration, bias, auto_trade: bool = False):
+def send_scan_completion(count, duration, bias):
     token  = CONFIG['api'].get('telegram_bot_token')
     raw_id = CONFIG['api'].get('telegram_chat_id')
     if not token or not raw_id:

@@ -5,7 +5,7 @@ Journal mode : WAL  → concurrent reads, serialised writes, no corruption on cr
 
 Tables
 ------
-  signals        — signal queue  (main.py → paper_runner / auto_trades)
+  signals        — signal queue  (main.py → paper_runner)
   active_trades  — live / pending positions
   sent_trades    — sinyal yang sudah dikirim ke Telegram
   paper_state    — paper trading balance  (single row, id = 1)
@@ -578,7 +578,7 @@ def purge_candle_confirm_state(max_age_hours: float = 4.0) -> int:
     return len(stale_keys)
 
 
-# ─── Signal Queue helper (used by main.py / auto_trades.py) ───────────────────
+# ─── Signal Queue helper (used by main.py / paper_runner.py) ────────────────
 
 # ─── Data Cleanup / TTL ────────────────────────────────────────────────────────
 
