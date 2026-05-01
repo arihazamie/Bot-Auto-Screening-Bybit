@@ -39,9 +39,10 @@ from modules.indicators import wilder_atr
 
 logger = logging.getLogger("ICTExtras")
 
-LOOKBACK         = 50          # how far back to scan for swings / OB candidates
-SWING_ORDER      = 3           # local-extrema window for swing detection
-TEST_TOLERANCE_A = 0.5         # how close to the zone (in ATR) counts as a "test"
+LOOKBACK             = 50      # how far back to scan for swings / OB candidates
+SWING_ORDER          = 3       # local-extrema window for swing detection
+TEST_TOLERANCE_A     = 0.5     # how close to the zone (in ATR) counts as a "test"
+DISPLACEMENT_ATR_MIN = 1.5     # minimum body of the displacement candle, in ATR units
 
 
 # ─── Common helpers ──────────────────────────────────────────────────────────
@@ -188,9 +189,18 @@ def detect_breaker_block_bearish(df: pd.DataFrame) -> dict | None:
 # ─── Mitigation Block detectors ──────────────────────────────────────────────
 
 def _last_displacement_block(df: pd.DataFrame, side: str, lookback: int = LOOKBACK) -> tuple[int, float, float] | None:
-    """Return (idx, top, bot) of the last opposite-side candle that preceded
-    a strong displacement candle. For Long: the last DOWN candle followed by a
-    big GREEN candle (3 ATR body). For Short: mirror."""
+    """Return ``(idx, top, bot)`` of the last opposite-side OB candle that was
+    immediately followed by a *strong displacement* candle.
+
+    ``DISPLACEMENT_ATR_MIN`` (default 1.5 × ATR) is the minimum body size of
+    the displacement candle — large enough to qualify as an impulsive move
+    away from the OB, small enough to remain achievable on lower-vol pairs.
+    Tighten to ``2.0–3.0`` for stricter ICT-style filtering on high-vol
+    instruments; loosen to ``1.0`` to recover more candidates on quiet pairs.
+
+    For ``side="Long"``: last DOWN candle followed by a big GREEN candle.
+    For ``side="Short"``: mirror.
+    """
     atr = _atr_value(df)
     if atr <= 0:
         return None
@@ -203,7 +213,7 @@ def _last_displacement_block(df: pd.DataFrame, side: str, lookback: int = LOOKBA
         disp_o = float(df["open"].iloc[i])
         disp_c = float(df["close"].iloc[i])
         body = abs(disp_c - disp_o)
-        if body < 1.0 * atr:
+        if body < DISPLACEMENT_ATR_MIN * atr:
             continue
         if side == "Long" and ob_c < ob_o and disp_c > disp_o:
             top = float(df["high"].iloc[i - 1])
