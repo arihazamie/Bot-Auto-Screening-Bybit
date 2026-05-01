@@ -181,19 +181,39 @@ def _from_smc(df: pd.DataFrame) -> list[dict]:
 
 
 def _normalise_smc_result(res) -> tuple[int | None, str | None]:
-    """Best-effort normalisation of `analyze_smc` return shape."""
+    """Best-effort normalisation of `analyze_smc` return shape.
+
+    Current `modules.smc.analyze_smc` returns ``(valid: bool, score: int,
+    reasons: list[str])``. Older / alternate shapes are also tolerated
+    (dict, ``(score, reason)`` tuple, scalar) so that the registry stays
+    robust if the SMC API evolves.
+    """
     if res is None:
         return None, None
     if isinstance(res, dict):
         return res.get("score"), str(res.get("reason") or res.get("reasons") or "")
     if isinstance(res, tuple):
+        # Canonical 3-tuple: (valid, score, reasons)
+        if len(res) >= 3 and isinstance(res[0], bool):
+            if not res[0]:                     # hard reject
+                return 0, None
+            score = res[1] if isinstance(res[1], (int, float)) and not isinstance(res[1], bool) else None
+            if isinstance(res[2], list):
+                reason = ", ".join(str(r) for r in res[2]) if res[2] else None
+            elif isinstance(res[2], str):
+                reason = res[2] or None
+            else:
+                reason = None
+            return score, reason
+        # Legacy 2-tuple: (score, reason). Reject bool-as-score.
         if len(res) >= 2:
-            score = res[0] if isinstance(res[0], (int, float)) else None
+            score = res[0] if isinstance(res[0], (int, float)) and not isinstance(res[0], bool) else None
             reason = res[1] if isinstance(res[1], str) else None
             return score, reason
         if len(res) == 1:
-            return res[0] if isinstance(res[0], (int, float)) else None, None
-    if isinstance(res, (int, float)):
+            v = res[0]
+            return (int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None), None
+    if isinstance(res, (int, float)) and not isinstance(res, bool):
         return int(res), None
     return None, None
 
