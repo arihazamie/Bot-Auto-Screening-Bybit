@@ -71,16 +71,26 @@ def _check_regular_divergence(price: np.ndarray, osc: np.ndarray) -> str | None:
     # Bearish via highs
     if highs.size >= MIN_PIVOTS:
         h1, h2 = highs[-2], highs[-1]
-        if h2 - h1 >= PIVOT_ORDER + 1:
-            if price[h2] > price[h1] and osc[h2] < osc[h1]:
-                return "Short"
+        if (
+            h2 - h1 >= PIVOT_ORDER + 1
+            and np.isfinite(osc[h1])
+            and np.isfinite(osc[h2])
+            and price[h2] > price[h1]
+            and osc[h2] < osc[h1]
+        ):
+            return "Short"
 
     # Bullish via lows
     if lows.size >= MIN_PIVOTS:
         l1, l2 = lows[-2], lows[-1]
-        if l2 - l1 >= PIVOT_ORDER + 1:
-            if price[l2] < price[l1] and osc[l2] > osc[l1]:
-                return "Long"
+        if (
+            l2 - l1 >= PIVOT_ORDER + 1
+            and np.isfinite(osc[l1])
+            and np.isfinite(osc[l2])
+            and price[l2] < price[l1]
+            and osc[l2] > osc[l1]
+        ):
+            return "Long"
     return None
 
 
@@ -91,7 +101,11 @@ def _compute_rsi(df: pd.DataFrame, length: int = 14) -> np.ndarray | None:
         rsi = ta.rsi(df["close"], length=length)
         if rsi is None or rsi.empty:
             return None
-        return rsi.bfill().to_numpy(dtype=float)
+        # Keep NaN values in the warm-up region; _check_regular_divergence
+        # skips any pivot whose oscillator sample is NaN. Backfilling would
+        # otherwise plant an artificial flat plateau across the warm-up
+        # window and could trigger false-positive divergence signals.
+        return rsi.to_numpy(dtype=float)
     except Exception as e:
         logger.debug(f"RSI fail: {e}")
         return None
@@ -108,7 +122,9 @@ def _compute_macd_hist(df: pd.DataFrame) -> np.ndarray | None:
         # Identify histogram column robustly (varies across pandas_ta versions).
         hist_cols = [c for c in macd.columns if "MACDh" in c]
         col = hist_cols[0] if hist_cols else macd.columns[1]
-        return macd[col].bfill().to_numpy(dtype=float)
+        # See note in _compute_rsi: do NOT bfill — keep NaNs and let the
+        # divergence checker reject pivots that fall in the warm-up window.
+        return macd[col].to_numpy(dtype=float)
     except Exception as e:
         logger.debug(f"MACD fail: {e}")
         return None
