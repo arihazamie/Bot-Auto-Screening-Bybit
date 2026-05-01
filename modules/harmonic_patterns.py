@@ -143,9 +143,10 @@ def _last_five_xabcd(pivots: list[tuple[int, float, str]]) -> tuple[list[tuple[i
     """Find the last 5 pivots that form a valid XABCD topology.
 
     The first four pivots (X, A, B, C) must strictly alternate; the fifth (D)
-    may be either kind. Side is decided by the kind of X:
-        * X is a swing High → Long (Bullish XABCD), entry near D
-        * X is a swing Low  → Short (Bearish XABCD), entry near D
+    may be either kind. Side is decided by the kind of X per Carney's
+    Harmonic Trading convention:
+        * X is a swing Low  (sequence LHLH…) → Long  — D is the PRZ buy zone
+        * X is a swing High (sequence HLHL…) → Short — D is the PRZ sell zone
 
     Topology checks here are intentionally minimal. Pattern-specific geometry
     (e.g. Bat: D between A and X; Shark: C extends past A) is enforced by the
@@ -157,9 +158,9 @@ def _last_five_xabcd(pivots: list[tuple[int, float, str]]) -> tuple[list[tuple[i
     for end in range(len(pivots), 4, -1):
         window = pivots[end - 5:end]
         kinds = "".join(p[2] for p in window)
-        if kinds[:4] == "HLHL":
-            return list(window), "Long"
         if kinds[:4] == "LHLH":
+            return list(window), "Long"
+        if kinds[:4] == "HLHL":
             return list(window), "Short"
     return None
 
