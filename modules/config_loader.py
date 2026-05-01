@@ -121,7 +121,10 @@ def load_config() -> dict:
         risk_errors.append("  - risk.max_positions: harus integer ≥ 1")
 
     target_leverage = risk.get("target_leverage")
-    if target_leverage is not None and (not isinstance(target_leverage, int) or target_leverage < 1):
+    if target_leverage is None:
+        # Inject a safe default so downstream `int(RISK.get(..., 10))` never sees None.
+        risk["target_leverage"] = 10
+    elif not isinstance(target_leverage, int) or target_leverage < 1:
         risk_errors.append("  - risk.target_leverage: harus integer ≥ 1 (paper sizing fallback)")
 
     max_leverage_cap = risk.get("max_leverage_cap")
