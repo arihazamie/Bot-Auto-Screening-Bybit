@@ -186,6 +186,23 @@ def init_db():
             key   TEXT PRIMARY KEY,
             value TEXT
         );
+
+        -- ── pattern_stats ────────────────────────────────────────────────────
+        -- One row per closed paper trade, attributed to the originating
+        -- pattern. `get_actual_winrate` aggregates only the trailing 30 days
+        -- so old samples auto-fade (rolling stats; never reset).
+        CREATE TABLE IF NOT EXISTS pattern_stats (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern_name  TEXT    NOT NULL,
+            symbol        TEXT,
+            side          TEXT,
+            outcome       TEXT    NOT NULL,           -- 'win' | 'loss' | 'breakeven'
+            pnl_pct       REAL    NOT NULL DEFAULT 0,
+            opened_at     TEXT,
+            closed_at     TEXT    NOT NULL            -- UTC ISO; the rolling-window key
+        );
+        CREATE INDEX IF NOT EXISTS idx_ps_name_closed ON pattern_stats (pattern_name, closed_at);
+        CREATE INDEX IF NOT EXISTS idx_ps_closed      ON pattern_stats (closed_at);
     """)
 
     # Seed paper_state (single row, never deleted)
@@ -485,6 +502,126 @@ def get_active_signals() -> set:
     return {(r['symbol'], r['timeframe']) for r in rows}
 
 
+# ─── Pattern stats (rolling 30-day winrate) ───────────────────────────────────
+
+PATTERN_STATS_MIN_SAMPLES = 10
+PATTERN_STATS_WINDOW_DAYS = 30
+
+
+def _isofmt_cutoff(days: int) -> str:
+    """Compute a rolling-window cutoff string in the same format used by
+    :func:`_utcnow_str` (``'YYYY-MM-DD HH:MM:SS.ffffff'``). Mismatched formats
+    (e.g. ``T``-separated ISO with ``+00:00``) would lexicographically miss
+    every stored row, so this helper exists to keep the comparison apples-to-
+    apples."""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%d %H:%M:%S.%f"
+    )
+
+
+def record_pattern_outcome(
+    pattern_name: str,
+    *,
+    symbol: str | None = None,
+    side: str | None = None,
+    outcome: str,
+    pnl_pct: float = 0.0,
+    opened_at: str | None = None,
+    closed_at: str | None = None,
+) -> int:
+    """Insert one closed-trade outcome attributed to ``pattern_name``.
+
+    ``outcome`` is one of ``"win"`` | ``"loss"`` | ``"breakeven"``.
+    ``closed_at`` defaults to the current UTC ISO timestamp; this column
+    is the key used by the rolling-30-day window in
+    :func:`get_actual_winrate`.
+    """
+    if not pattern_name:
+        raise ValueError("pattern_name is required")
+    if outcome not in ("win", "loss", "breakeven"):
+        raise ValueError(f"outcome must be win|loss|breakeven, got {outcome!r}")
+    closed_at = closed_at or _utcnow_str()
+    c = _conn()
+    cur = c.execute(
+        """INSERT INTO pattern_stats
+             (pattern_name, symbol, side, outcome, pnl_pct, opened_at, closed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (pattern_name, symbol, side, outcome, float(pnl_pct), opened_at, closed_at),
+    )
+    c.commit()
+    return cur.lastrowid
+
+
+def get_actual_winrate(
+    pattern_name: str,
+    days: int = PATTERN_STATS_WINDOW_DAYS,
+) -> tuple[float | None, int]:
+    """Return ``(winrate, sample_count)`` for ``pattern_name`` over the last
+    ``days`` days. ``winrate`` is ``None`` when ``sample_count`` is below
+    :data:`PATTERN_STATS_MIN_SAMPLES` (insufficient data → caller should
+    fall back to the literature baseline).
+
+    Breakeven outcomes count toward sample size but neither win nor loss.
+    """
+    cutoff = _isofmt_cutoff(days)
+    row = _conn().execute(
+        """SELECT
+             SUM(CASE WHEN outcome = 'win'  THEN 1 ELSE 0 END) AS wins,
+             SUM(CASE WHEN outcome = 'loss' THEN 1 ELSE 0 END) AS losses,
+             COUNT(*)                                         AS total
+           FROM pattern_stats
+           WHERE pattern_name = ? AND closed_at >= ?""",
+        (pattern_name, cutoff),
+    ).fetchone()
+    if row is None:
+        return None, 0
+    # NOTE: _to_int is a *boolean* helper (returns 1 if truthy, 0 otherwise),
+    # so we MUST use plain int() for SQL count/sum aggregates.
+    total  = int(row["total"]  or 0)
+    wins   = int(row["wins"]   or 0)
+    losses = int(row["losses"] or 0)
+    decisive = wins + losses
+    if total < PATTERN_STATS_MIN_SAMPLES or decisive == 0:
+        return None, total
+    return wins / decisive, total
+
+
+def get_pattern_stats_summary(days: int = PATTERN_STATS_WINDOW_DAYS) -> list[dict]:
+    """Return per-pattern aggregate stats for the trailing window. Rows
+    are ordered by sample count desc, then winrate desc. Useful for
+    diagnostic Telegram /stats commands."""
+    cutoff = _isofmt_cutoff(days)
+    rows = _conn().execute(
+        """SELECT
+             pattern_name,
+             SUM(CASE WHEN outcome = 'win'  THEN 1 ELSE 0 END) AS wins,
+             SUM(CASE WHEN outcome = 'loss' THEN 1 ELSE 0 END) AS losses,
+             COUNT(*)                                         AS total,
+             AVG(pnl_pct)                                     AS avg_pnl_pct
+           FROM pattern_stats
+           WHERE closed_at >= ?
+           GROUP BY pattern_name
+           ORDER BY total DESC, wins DESC""",
+        (cutoff,),
+    ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        wins   = int(r["wins"]   or 0)
+        losses = int(r["losses"] or 0)
+        total  = int(r["total"]  or 0)
+        decisive = wins + losses
+        wr = (wins / decisive) if decisive else None
+        out.append({
+            "pattern_name": r["pattern_name"],
+            "wins": wins,
+            "losses": losses,
+            "total": total,
+            "winrate": wr,
+            "avg_pnl_pct": r["avg_pnl_pct"] or 0.0,
+        })
+    return out
+
+
 # ─── State Store ───────────────────────────────────────────────────────────────
 
 def get_state(key: str):
@@ -587,6 +724,7 @@ def purge_old_data(
     closed_trades_days: int = 90,
     sent_trades_days: int = 90,
     daily_reports_days: int = 180,
+    pattern_stats_days: int = 90,
 ) -> dict:
     """
     Hapus data lama dari semua tabel untuk mencegah disk/memory leak.
@@ -603,10 +741,11 @@ def purge_old_data(
     """
     now = datetime.now()
     cutoffs = {
-        'signals':       str(now - timedelta(days=signals_days)),
-        'closed_trades': str(now - timedelta(days=closed_trades_days)),
-        'sent_trades':   str(now - timedelta(days=sent_trades_days)),
-        'daily_reports': (now - timedelta(days=daily_reports_days)).date().isoformat(),
+        'signals':        str(now - timedelta(days=signals_days)),
+        'closed_trades':  str(now - timedelta(days=closed_trades_days)),
+        'sent_trades':    str(now - timedelta(days=sent_trades_days)),
+        'daily_reports':  (now - timedelta(days=daily_reports_days)).date().isoformat(),
+        'pattern_stats':  (datetime.now(timezone.utc) - timedelta(days=pattern_stats_days)).isoformat(),
     }
 
     c = _conn()
@@ -643,6 +782,14 @@ def purge_old_data(
         (cutoffs['daily_reports'],)
     )
     deleted['daily_reports'] = cur.rowcount
+
+    # 5. Pattern stats di luar window analitik (default 90 hari, jauh > 30d
+    #    rolling window yang dipakai get_actual_winrate, jadi tetap aman).
+    cur = c.execute(
+        "DELETE FROM pattern_stats WHERE closed_at < ?",
+        (cutoffs['pattern_stats'],)
+    )
+    deleted['pattern_stats'] = cur.rowcount
 
     c.commit()
 
