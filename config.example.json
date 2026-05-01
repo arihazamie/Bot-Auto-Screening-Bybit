@@ -15,7 +15,7 @@
     "trend_timeframe": "1h",
     "confirm_timeframe": "5m",
     "min_candles_analysis": 150,
-    "watchlist_top_n": 100,
+    "watchlist_top_n": 300,
     "active_hours_utc": [6, 22],
     "skip_weekends": true,
     "skip_hours_utc": [],

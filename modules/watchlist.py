@@ -1,6 +1,9 @@
 """
 watchlist.py — Top N USDT Perpetual pairs by 24h volume dari Bybit.
 
+Default TOP_N=300: covers virtually every liquid USDT perpetual on Bybit.
+Override via system.watchlist_top_n in config.json (e.g. 100 for a tighter list).
+
 Direfresh setiap hari jam 7 pagi via schedule di main.py.
 Data disimpan di data/watchlist.json sebagai cache.
 
@@ -22,7 +25,7 @@ logger = logging.getLogger("Watchlist")
 # ─── Config ────────────────────────────────────────────────
 BASE_DIR      = os.path.join(os.path.dirname(__file__), '..', 'data')
 WATCHLIST_F   = os.path.join(BASE_DIR, 'watchlist.json')
-TOP_N         = 100
+TOP_N         = 300
 
 # Fix #3: anggap watchlist stale kalau lebih tua dari `max_age_hours`.
 # Default 36 jam (refresh harian + 12 jam toleransi). Override via

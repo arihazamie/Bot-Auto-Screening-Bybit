@@ -1316,7 +1316,7 @@ def send_heartbeat():
 # ─────────────────────────────────────────────────────────────────────────────
 def refresh_daily_watchlist():
     logger.info("🔄 Daily watchlist refresh...")
-    symbols = refresh_watchlist(client.raw, top_n=CONFIG["system"].get("watchlist_top_n", 100))
+    symbols = refresh_watchlist(client.raw, top_n=CONFIG["system"].get("watchlist_top_n", 300))
     if symbols:
         logger.info(f"✅ Watchlist refreshed: {len(symbols)} pairs")
     else:
@@ -1354,7 +1354,7 @@ if __name__ == "__main__":
     # ── Refresh watchlist saat startup ──────────────────────────
     if not get_watchlist():
         logger.info("📋 Watchlist belum ada — fetch sekarang...")
-        refresh_watchlist(client.raw, top_n=CONFIG["system"].get("watchlist_top_n", 100))
+        refresh_watchlist(client.raw, top_n=CONFIG["system"].get("watchlist_top_n", 300))
 
     # ── Mulai scan pertama ───────────────────────────────────────
     scan()
