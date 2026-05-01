@@ -1263,7 +1263,7 @@ def scan():
             print("   (tidak ada pair yang diproses — kemungkinan watchlist kosong)")
 
         print()
-        logger.info(f"✅ Scan selesai {duration:.2f}s | Signals: {signal_count} | Mode: {mode_label}")
+        logger.info(f"✅ Scan selesai {duration:.2f}s | Signals: {signal_count} | Mode: SIGNAL ONLY 📡")
         send_scan_completion(signal_count, duration, btc_bias)
 
 
