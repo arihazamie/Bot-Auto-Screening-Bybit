@@ -1,11 +1,9 @@
 """
 modules/leverage.py — Single source of truth for per-symbol leverage.
 
-Both `auto_trades.py` (real mode) and `paper_runner.py` (paper mode) used to
-duplicate this logic with **inconsistent defaults**: real mode capped at 100x,
-paper mode capped at 20x. The two modes ended up sizing positions differently.
-
-This helper centralises the resolution so paper and real always agree:
+Centralises per-symbol leverage resolution for the paper portfolio tracker.
+In the original codebase this also synced real-mode trading; the bot is now
+signal-only, so this helper is paper-only — retained for consistent sizing:
 
     use_max_leverage  → Bybit per-symbol max (BTC=100x, SOL=50x, …) clipped by
                         max_leverage_cap.
@@ -44,10 +42,9 @@ def _get_client() -> BybitClient:
 
 def resolve_leverage(symbol: str, client: BybitClient | None = None) -> int:
     """
-    Return the leverage to use for `symbol`. Identical for paper and real
-    modes. Optional `client` lets `auto_trades.py` reuse its already-
-    authenticated client; paper mode just lazily spins one up via
-    `_get_client()`.
+    Return the leverage to use for `symbol` in paper sizing. The optional
+    `client` argument is retained for backward-compat — paper mode lazily
+    spins one up via `_get_client()`.
 
     Behaviour:
       * `use_max_leverage=true`  → Bybit per-symbol max (clamped by

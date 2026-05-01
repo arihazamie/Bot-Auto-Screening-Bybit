@@ -1,11 +1,13 @@
 # Bot Auto Screening Bybit
 
-A Python trading bot that automatically scans Bybit USDT-Perpetual futures, generates signals from a multi-layer strategy, and either **simulates trades** (paper mode, default) or **places real orders** (auto-trade mode). Every signal, fill, take-profit hit, and daily summary is delivered to your Telegram chat.
+A Python **signal-only screener** that scans Bybit USDT-Perpetual futures every 15 minutes, runs a multi-layer pattern + SMC + derivatives strategy, and pushes opportunities to your Telegram chat. A virtual portfolio tracker (paper mode) follows each signal so you can see what win-rate and PnL the strategy would have produced — without ever placing a real order.
 
 > **Heads up — read this before running anything.**
-> - Crypto trading is risky. This bot can lose money, especially in real-trade mode.
-> - The default config runs in **paper mode** (no real orders). Run it for at least 1–2 weeks before even thinking about flipping `auto_trade: true`.
-> - This is not financial advice. You are responsible for everything the bot does with your account.
+> - This bot **does not place real orders**. It is screening + paper tracker only. If you want to act on a signal, do it manually.
+> - Signals can still lose money if you act on them. Always paper-test for 1–2 weeks before trusting any signal blindly.
+> - This is not financial advice.
+
+> **Notice (Phase 1 of refactor):** Real-trading (`auto_trade`) was removed. `auto_trades.py` is gone, `auto_trade` no longer exists in config. Sections of this README still describe the old auto-trade mode and will be rewritten in a later phase. Treat any mention of "auto trade" / "real orders" as historical until the rewrite lands.
 
 ---
 

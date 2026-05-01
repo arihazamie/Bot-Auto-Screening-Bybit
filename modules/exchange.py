@@ -121,18 +121,13 @@ class BybitClient:
     """
 
     def __init__(self, debug: bool = False, auto_trade: bool = False):
+        # `auto_trade` argument retained for backward-compat with older callers,
+        # but the bot is now signal-only — we never set API keys regardless.
         self.debug = debug
-        self.auto_trade = auto_trade
+        self.auto_trade = False
 
-        # Hanya set API key jika auto_trade=True.
-        # Signal-only mode tidak butuh key — semua data dari public endpoint CCXT.
-        # Tanpa key, CCXT tidak akan memanggil endpoint private apapun.
-        api_cfg = {}
-        if auto_trade:
-            api_cfg = {
-                "apiKey": CONFIG["api"].get("bybit_key",    ""),
-                "secret": CONFIG["api"].get("bybit_secret", ""),
-            }
+        # Signal-only: no API key. CCXT will only hit public market-data endpoints.
+        api_cfg: dict = {}
 
         self._ex = ccxt.bybit({
             **api_cfg,
@@ -221,15 +216,10 @@ class BybitClient:
     # ─────────────────────────────────────────────
     def health_check(self, auto_trade: bool = False) -> bool:
         """
-        Verifikasi koneksi ke Bybit dan validasi API key.
-        Print ringkasan status ke stdout.
-        Return True jika OK, False jika ada masalah.
+        Verifikasi koneksi ke Bybit (public market-data only).
+        Print ringkasan status ke stdout. Return True jika OK.
 
-        Parameter
-        ---------
-        auto_trade : bool
-            True  → private API wajib OK (bot akan trade)
-            False → private API opsional (signal-only, data publik cukup)
+        `auto_trade` retained for backward-compat — ignored in signal-only mode.
         """
         print("\n" + "─" * 50)
         print("🔌 Bybit Connection Health Check")
@@ -251,27 +241,7 @@ class BybitClient:
             print(f"  ❌ Public API  — GAGAL: {type(e).__name__}: {e}")
             ok = False
 
-        # 2. Test API key (private endpoint) — hanya wajib jika auto_trade=True
-        api_key = CONFIG["api"].get("bybit_key", "")
-        if api_key and api_key != "YOUR_BYBIT_API_KEY":
-            try:
-                t0 = time.time()
-                bal = self._ex.fetch_balance(params={"accountType": "UNIFIED"})
-                ms  = (time.time() - t0) * 1000
-                usdt = bal.get("USDT", {}).get("free", 0)
-                print(f"  ✅ Private API — OK ({ms:.0f}ms) | USDT Balance: {usdt:,.2f}")
-            except Exception as e:
-                if auto_trade:
-                    # Auto trade mode: private API wajib → ini error fatal
-                    print(f"  ❌ Private API — AUTH GAGAL: {e}")
-                    print(f"     → Cek bybit_key & bybit_secret di config.json")
-                    ok = False
-                else:
-                    # Signal-only mode: private API tidak dipakai → cukup warning
-                    print(f"  ⚠️  Private API — Tidak bisa diakses (signal-only mode, tidak masalah)")
-                    print(f"     → Jika ingin auto trade, tambahkan permission 'Derivatives Read' di API key Bybit")
-        else:
-            print(f"  ⚠️  Private API — API key tidak dikonfigurasi (signal-only mode OK)")
+        # Signal-only: no private endpoint check needed.
 
         # 3. Format symbol
         test_sym = self.normalize_symbol("BTC/USDT")

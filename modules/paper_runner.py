@@ -1,7 +1,7 @@
 """
 paper_runner.py — Paper Trade Background Runner
 ================================================
-Dijalankan otomatis sebagai daemon thread ketika auto_trade: false.
+Dijalankan otomatis sebagai daemon thread di signal-only mode.
 Tidak perlu terminal kedua. Cukup jalankan main.py saja.
 
 Loop ini menangani:
@@ -47,10 +47,10 @@ logger = logging.getLogger("PaperRunner")
 # ─── Config ────────────────────────────────────────────────────────────────
 RISK             = CONFIG["risk"]
 USE_MAX_LEVERAGE = RISK.get("use_max_leverage", True)    # default ON: pakai max lev tiap coin
-TARGET_LEV       = RISK["target_leverage"]               # Fallback / fixed leverage jika use_max_leverage=False
-MAX_LEVERAGE_CAP = RISK.get("max_leverage_cap", 100)     # Hard cap — sinkron dengan auto_trades.py
-RISK_PERCENT     = RISK["risk_percent"]
-MAX_POSITIONS    = RISK["max_positions"]
+TARGET_LEV       = int(RISK.get("target_leverage", 10))  # Fallback / fixed leverage jika use_max_leverage=False
+MAX_LEVERAGE_CAP = RISK.get("max_leverage_cap", 100)     # Hard cap leverage untuk simulasi paper
+RISK_PERCENT     = float(RISK.get("risk_percent", 0.01))
+MAX_POSITIONS    = int(RISK.get("max_positions", 2))
 MAX_DAILY_LOSS   = RISK.get("max_daily_loss_pct", 0.01)
 DAILY_TARGET     = RISK.get("daily_profit_target_pct", 0.015)
 MAX_DAILY_TRADES = RISK.get("max_daily_trades", 3)
@@ -488,7 +488,7 @@ def run_paper_update():
 def start_paper_runner():
     """
     Jalankan paper trade runner sebagai daemon thread.
-    Panggil ini dari main.py ketika auto_trade=False.
+    Panggil ini dari main.py untuk virtual portfolio tracking.
     Thread daemon akan otomatis mati saat main process berhenti.
     """
     t = threading.Thread(
