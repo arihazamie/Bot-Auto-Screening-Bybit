@@ -232,16 +232,19 @@ def _ingest_signals():
             continue
 
         insert_active_trade({
-            "signal_id":       sig["id"],
-            "symbol":          sym,
-            "side":            side,
-            "entry_price":     entry,
-            "sl_price":        sl,
+            "signal_id":          sig["id"],
+            "symbol":             sym,
+            "side":               side,
+            "entry_price":        entry,
+            "sl_price":           sl,
             "tp1": tp1, "tp2": tp2, "tp3": tp3,
-            "quantity":        qty,
-            "leverage":        final_lev,
-            "mode":            MODE,
-            "telegram_msg_id": tg_msg_id,   # ✅ simpan untuk reply selanjutnya
+            "quantity":           qty,
+            "leverage":           final_lev,
+            "mode":               MODE,
+            "telegram_msg_id":    tg_msg_id,   # ✅ simpan untuk reply selanjutnya
+            # Phase 8: carry pattern_registry hits forward so the close path
+            # can attribute pnl back to each detected pattern.
+            "registry_hits_json": sig.get("registry_hits_json"),
         })
         open_count += 1
         daily_count += 1

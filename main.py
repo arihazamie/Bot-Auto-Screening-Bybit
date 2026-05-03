@@ -41,6 +41,7 @@ from modules.quant import calculate_metrics, check_fakeout
 from modules.derivatives import analyze_derivatives
 from modules.smc import analyze_smc
 from modules.patterns import find_pattern, pattern_direction
+from modules.pattern_registry import detect_all_patterns
 from modules.regime import classify_regime, regime_allows
 from modules.range_strategy import find_range_signal, range_strategy_enabled
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
@@ -1058,6 +1059,34 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             f"quant={scores['quant_score']} deriv={scores['deriv_score']})"
         )
 
+        # ─── Phase 8: pattern registry (signal enrichment, not a gate) ──
+        # Run the central pattern registry on the same dataframe we just
+        # finished analysing. The MTF confluence step has already warmed
+        # the OHLCV cache for TREND_TF, so refetching that timeframe is
+        # effectively free — pass it in so the multi-TF divergence module
+        # can fire confluence hits where ≥2 TFs agree.
+        registry_hits: list[dict] = []
+        try:
+            multi_tf_dfs = {ENTRY_TF: df}
+            try:
+                min_candles = CONFIG["system"].get("min_candles_analysis", 150)
+                df_htf_for_registry = client.fetch_ohlcv(
+                    symbol, TREND_TF, limit=min_candles + 50
+                )
+                if df_htf_for_registry is not None and len(df_htf_for_registry) >= 50:
+                    multi_tf_dfs[TREND_TF] = df_htf_for_registry
+            except Exception as e:
+                logger.debug(f"[{symbol}] registry HTF fetch fail: {e}")
+            registry_hits = detect_all_patterns(df, multi_tf_dfs=multi_tf_dfs)
+            if registry_hits:
+                names = ", ".join(h.get("name", "?") for h in registry_hits[:6])
+                more = f" (+{len(registry_hits)-6} more)" if len(registry_hits) > 6 else ""
+                logger.info(
+                    f"   📚 [{symbol}] registry hits: {len(registry_hits)} — {names}{more}"
+                )
+        except Exception as e:
+            logger.debug(f"[{symbol}] registry detect fail: {e}", exc_info=False)
+
         return {
             "Symbol":       symbol,
             "Side":         side,
@@ -1083,6 +1112,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "Quant_Reasons": ", ".join(str(r) for r in scores["quant_reasons"]),
             "SMC_Reasons":   ", ".join(str(r) for r in scores["smc_reasons"] if r),
             "Deriv_Reasons": ", ".join(str(r) for r in scores["deriv_reasons"]),
+            "RegistryHits":  registry_hits,            # Phase 8
             "df": df,
         }
 

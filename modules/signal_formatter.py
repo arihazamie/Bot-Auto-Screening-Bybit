@@ -172,3 +172,50 @@ def format_signal(
         lines.extend(extra_lines)
 
     return "\n".join(lines)
+
+
+# ─── HTML helpers (used by Telegram send_alert which uses parse_mode=HTML) ──
+
+def format_pattern_block_html(
+    hits: list[dict],
+    *,
+    days: int = PATTERN_STATS_WINDOW_DAYS,
+    max_hits: int = 12,
+) -> str:
+    """Render ``hits`` (output of ``detect_all_patterns``) as a small HTML
+    block suitable for embedding in :func:`modules.telegram_bot.send_alert`,
+    which uses ``parse_mode=HTML`` (not Markdown).
+
+    Empty ``hits`` → empty string. Caller must check.
+    """
+    if not hits:
+        return ""
+
+    truncated = hits[:max_hits]
+    extra = len(hits) - len(truncated)
+
+    out: list[str] = ["<b>📚 Pattern Registry</b>"]
+    displayed_rates: list[float] = []
+    for h in truncated:
+        name     = h.get("name", "?")
+        side     = h.get("side", "?")
+        baseline = h.get("baseline")
+        line, displayed, label = winrate_line(name, baseline, days=days)
+        displayed_rates.append(displayed)
+        emoji_c  = _confidence_emoji(label)
+        side_str = side if side in ("Long", "Short") else "—"
+        out.append(
+            f"   {emoji_c} <code>{name}</code> ({side_str})  "
+            f"<i>{line}</i>  ·  <b>{label}</b>"
+        )
+    if extra > 0:
+        out.append(f"   <i>… and {extra} more</i>")
+
+    if displayed_rates:
+        avg = sum(displayed_rates) / len(displayed_rates)
+        agg = confidence_label(avg)
+        out.append(
+            f"   <i>Aggregate</i>  <code>{avg*100:.0f}%</code>  ({agg})"
+        )
+
+    return "\n".join(out)

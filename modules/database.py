@@ -205,6 +205,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_ps_closed      ON pattern_stats (closed_at);
     """)
 
+    # ── Idempotent schema migrations ─────────────────────────────────────────
+    # SQLite has no `ADD COLUMN IF NOT EXISTS`, so we PRAGMA-introspect first.
+    # Phase 8: registry_hits_json carries the pattern_registry hits from
+    # signal → active_trade so paper-trader close can attribute outcomes.
+    def _add_col_if_missing(table: str, col: str, decl: str) -> None:
+        existing = {r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in existing:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+    _add_col_if_missing("signals",       "registry_hits_json", "TEXT")
+    _add_col_if_missing("active_trades", "registry_hits_json", "TEXT")
+
     # Seed paper_state (single row, never deleted)
     c.execute(
         "INSERT OR IGNORE INTO paper_state (id, balance, updated_at) VALUES (1, ?, ?)",
@@ -221,8 +233,9 @@ def insert_signal(data: dict) -> int:
     cur = c.execute(
         """INSERT INTO signals
            (symbol, side, timeframe, entry_price, sl_price,
-            tp1, tp2, tp3, rr, pattern, btc_bias, telegram_msg_id, ingested, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?)""",
+            tp1, tp2, tp3, rr, pattern, btc_bias, telegram_msg_id, ingested,
+            registry_hits_json, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)""",
         (
             data.get('symbol'),          data.get('side'),
             data.get('timeframe'),       data.get('entry_price'),
@@ -230,6 +243,7 @@ def insert_signal(data: dict) -> int:
             data.get('tp2'),             data.get('tp3'),
             data.get('rr'),              data.get('pattern'),
             data.get('btc_bias'),        data.get('telegram_msg_id'),
+            data.get('registry_hits_json'),
             _utcnow_str(),
         )
     )
@@ -275,8 +289,8 @@ def insert_active_trade(data: dict) -> int:
            (signal_id, symbol, side, timeframe, entry_price, sl_price,
             tp1, tp2, tp3, quantity, leverage, mode,
             status, order_id, is_sl_moved, pnl, telegram_msg_id,
-            created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            registry_hits_json, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get('signal_id'),                    data.get('symbol'),
             data.get('side'),                         data.get('timeframe'),
@@ -286,7 +300,8 @@ def insert_active_trade(data: dict) -> int:
             data.get('leverage'),                     data.get('mode'),
             data.get('status', 'PENDING'),            data.get('order_id'),
             _to_int(data.get('is_sl_moved', False)),  data.get('pnl', 0),
-            data.get('telegram_msg_id'),              now, now,
+            data.get('telegram_msg_id'),              data.get('registry_hits_json'),
+            now, now,
         )
     )
     c.commit()
@@ -809,18 +824,118 @@ def purge_old_data(
 
 
 def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
-    """Convert analyze_ticker result → signal queue entry."""
+    """Convert analyze_ticker result → signal queue entry. Phase 8: serialise
+    pattern_registry hits as JSON so the paper-trader close path can attribute
+    pnl back to each detected pattern."""
+    hits = res.get("RegistryHits") or []
+    # Strip non-serialisable junk defensively (the registry already returns
+    # plain dicts of primitives, but a future detector might attach numpy types).
+    safe_hits: list[dict] = []
+    for h in hits:
+        if not isinstance(h, dict):
+            continue
+        safe_hits.append({
+            "name":     str(h.get("name", "")),
+            "side":     str(h.get("side", "")),
+            "details":  str(h.get("details", "")),
+            "baseline": float(h["baseline"]) if h.get("baseline") is not None else None,
+            "source":   str(h.get("source", "")),
+        })
+    registry_hits_json = json.dumps(safe_hits) if safe_hits else None
+
     return insert_signal({
-        "symbol":          res['Symbol'],
-        "side":            res['Side'],
-        "timeframe":       res['Timeframe'],
-        "entry_price":     res['Entry'],
-        "sl_price":        res['SL'],
-        "tp1":             res['TP1'],
-        "tp2":             res['TP2'],
-        "tp3":             res['TP3'],
-        "rr":              res['RR'],
-        "pattern":         res['Pattern'],
-        "btc_bias":        res['BTC_Bias'],
-        "telegram_msg_id": telegram_msg_id,
+        "symbol":             res['Symbol'],
+        "side":               res['Side'],
+        "timeframe":          res['Timeframe'],
+        "entry_price":        res['Entry'],
+        "sl_price":           res['SL'],
+        "tp1":                res['TP1'],
+        "tp2":                res['TP2'],
+        "tp3":                res['TP3'],
+        "rr":                 res['RR'],
+        "pattern":            res['Pattern'],
+        "btc_bias":           res['BTC_Bias'],
+        "telegram_msg_id":    telegram_msg_id,
+        "registry_hits_json": registry_hits_json,
     })
+
+
+# ─── Pattern-attribution close hook ────────────────────────────────────────────
+
+def record_trade_close_outcomes(
+    trade_id: int,
+    *,
+    symbol: str,
+    side: str,
+    pnl: float,
+    opened_at: str | None = None,
+    closed_at: str | None = None,
+    breakeven_band_pct: float = 0.0005,
+) -> int:
+    """Walk the closed trade's stored ``registry_hits_json`` and emit one
+    :func:`record_pattern_outcome` row per attributed pattern.
+
+    Outcome mapping:
+      * ``win``       — ``pnl > +breakeven_band_pct × entry``  (default ±0.05%)
+      * ``loss``      — ``pnl < -breakeven_band_pct × entry``
+      * ``breakeven`` — within the band (or exactly zero)
+
+    Always reads the originating ``Pattern`` text column too (the existing
+    pipeline's primary pattern label) so attribution still works for trades
+    that pre-date the phase 8 schema migration.
+
+    Returns the number of pattern_stats rows inserted. Failures are logged
+    but never raised — pattern stats are advisory; we don't want a JSON
+    decode error to abort the close path.
+    """
+    import logging
+    log = logging.getLogger("PatternStats")
+    try:
+        row = _conn().execute(
+            "SELECT registry_hits_json, entry_price FROM active_trades WHERE id = ?",
+            (trade_id,),
+        ).fetchone()
+    except Exception as e:
+        log.warning(f"trade {trade_id} close-attribution lookup failed: {e}")
+        return 0
+    if row is None:
+        return 0
+
+    entry = float(row["entry_price"] or 0.0)
+    band = abs(entry) * breakeven_band_pct
+    if pnl > band:
+        outcome = "win"
+    elif pnl < -band:
+        outcome = "loss"
+    else:
+        outcome = "breakeven"
+
+    try:
+        hits_raw = row["registry_hits_json"]
+        hits = json.loads(hits_raw) if hits_raw else []
+    except (TypeError, ValueError) as e:
+        log.warning(f"trade {trade_id} registry_hits_json decode failed: {e}")
+        hits = []
+
+    pnl_pct = (pnl / entry * 100.0) if entry else 0.0
+    n = 0
+    seen: set[str] = set()
+    for h in hits:
+        name = str(h.get("name", "")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            record_pattern_outcome(
+                name,
+                symbol=symbol,
+                side=side,
+                outcome=outcome,
+                pnl_pct=pnl_pct,
+                opened_at=opened_at,
+                closed_at=closed_at,
+            )
+            n += 1
+        except Exception as e:
+            log.warning(f"record_pattern_outcome({name!r}) failed: {e}")
+    return n
