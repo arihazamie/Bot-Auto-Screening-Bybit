@@ -868,6 +868,7 @@ def record_trade_close_outcomes(
     symbol: str,
     side: str,
     pnl: float,
+    qty: float | None = None,
     opened_at: str | None = None,
     closed_at: str | None = None,
     breakeven_band_pct: float = 0.0005,
@@ -876,13 +877,20 @@ def record_trade_close_outcomes(
     :func:`record_pattern_outcome` row per attributed pattern.
 
     Outcome mapping:
-      * ``win``       — ``pnl > +breakeven_band_pct × entry``  (default ±0.05%)
-      * ``loss``      — ``pnl < -breakeven_band_pct × entry``
+      * ``win``       — ``pnl > +breakeven_band_pct × position_value``
+      * ``loss``      — ``pnl < -breakeven_band_pct × position_value``
       * ``breakeven`` — within the band (or exactly zero)
 
-    Always reads the originating ``Pattern`` text column too (the existing
-    pipeline's primary pattern label) so attribution still works for trades
-    that pre-date the phase 8 schema migration.
+    The caller MUST pass the ``qty`` that was actually closed in this leg —
+    not the original full position size. ``_close_paper_trade`` invokes this
+    after partial TP fills (TP1 40% + TP2 30% can leave 30% on the final
+    leg), so using ``active_trades.quantity`` (the original full qty) would
+    inflate the band ~3.3× and silently mislabel TP3 wins as breakeven.
+
+    For trades that pre-date the phase-8 schema migration (i.e.
+    ``registry_hits_json`` is NULL), falls back to the originating
+    ``signals.pattern`` text column and emits one row using
+    ``baseline_for(pattern)`` so historical trades still feed pattern_stats.
 
     Returns the number of pattern_stats rows inserted. Failures are logged
     but never raised — pattern stats are advisory; we don't want a JSON
@@ -892,7 +900,7 @@ def record_trade_close_outcomes(
     log = logging.getLogger("PatternStats")
     try:
         row = _conn().execute(
-            "SELECT registry_hits_json, entry_price, quantity "
+            "SELECT registry_hits_json, entry_price, quantity, signal_id "
             "FROM active_trades WHERE id = ?",
             (trade_id,),
         ).fetchone()
@@ -903,12 +911,19 @@ def record_trade_close_outcomes(
         return 0
 
     entry = float(row["entry_price"] or 0.0)
-    qty   = float(row["quantity"]    or 0.0)
+    # Prefer the explicit ``qty`` passed by the caller (the actually-closed
+    # portion); fall back to the row's full quantity only when the caller
+    # didn't tell us. This is the partial-TP correctness fix from
+    # Devin Review on PR #21.
+    if qty is None or qty <= 0:
+        qty = float(row["quantity"] or 0.0)
+    else:
+        qty = float(qty)
     # Position-value is what we measure pnl against. The breakeven band must
     # be in dollar terms because ``pnl`` is total-dollar PnL (price diff × qty
     # less fees). Comparing dollar pnl to a per-unit price band silently
     # mislabels nearly every BTC trade as breakeven when the actual move is
-    # a routine ±1% (caught by Devin Review on PR #21).
+    # a routine ±1%.
     position_value = entry * qty
     if position_value > 0:
         band = position_value * breakeven_band_pct
@@ -928,6 +943,23 @@ def record_trade_close_outcomes(
     except (TypeError, ValueError) as e:
         log.warning(f"trade {trade_id} registry_hits_json decode failed: {e}")
         hits = []
+
+    # ── Backward-compat: pre-phase-8 trades have no registry_hits_json.
+    # Fall back to the primary pattern label on the originating signal so
+    # legacy trades closing after the migration still feed pattern_stats.
+    if not hits and row["signal_id"]:
+        try:
+            from modules.pattern_registry import baseline_for
+            sig_row = _conn().execute(
+                "SELECT pattern FROM signals WHERE id = ?",
+                (row["signal_id"],),
+            ).fetchone()
+            if sig_row and sig_row["pattern"]:
+                pat = str(sig_row["pattern"]).strip()
+                if pat:
+                    hits = [{"name": pat, "baseline": baseline_for(pat)}]
+        except Exception as e:
+            log.debug(f"trade {trade_id} legacy-pattern fallback failed: {e}")
 
     # ``pnl_pct`` is the price-change percentage (= ROI on notional) so it
     # stays comparable across coins with very different prices/quantities.
