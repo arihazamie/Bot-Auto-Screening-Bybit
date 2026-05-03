@@ -892,7 +892,8 @@ def record_trade_close_outcomes(
     log = logging.getLogger("PatternStats")
     try:
         row = _conn().execute(
-            "SELECT registry_hits_json, entry_price FROM active_trades WHERE id = ?",
+            "SELECT registry_hits_json, entry_price, quantity "
+            "FROM active_trades WHERE id = ?",
             (trade_id,),
         ).fetchone()
     except Exception as e:
@@ -902,7 +903,18 @@ def record_trade_close_outcomes(
         return 0
 
     entry = float(row["entry_price"] or 0.0)
-    band = abs(entry) * breakeven_band_pct
+    qty   = float(row["quantity"]    or 0.0)
+    # Position-value is what we measure pnl against. The breakeven band must
+    # be in dollar terms because ``pnl`` is total-dollar PnL (price diff × qty
+    # less fees). Comparing dollar pnl to a per-unit price band silently
+    # mislabels nearly every BTC trade as breakeven when the actual move is
+    # a routine ±1% (caught by Devin Review on PR #21).
+    position_value = entry * qty
+    if position_value > 0:
+        band = position_value * breakeven_band_pct
+    else:
+        # Defensive fallback for legacy rows without quantity recorded
+        band = abs(entry) * breakeven_band_pct
     if pnl > band:
         outcome = "win"
     elif pnl < -band:
@@ -917,7 +929,12 @@ def record_trade_close_outcomes(
         log.warning(f"trade {trade_id} registry_hits_json decode failed: {e}")
         hits = []
 
-    pnl_pct = (pnl / entry * 100.0) if entry else 0.0
+    # ``pnl_pct`` is the price-change percentage (= ROI on notional) so it
+    # stays comparable across coins with very different prices/quantities.
+    if position_value > 0:
+        pnl_pct = pnl / position_value * 100.0
+    else:
+        pnl_pct = 0.0
     n = 0
     seen: set[str] = set()
     for h in hits:
