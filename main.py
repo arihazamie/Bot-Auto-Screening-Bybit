@@ -47,6 +47,10 @@ from modules.invalidation import get_invalidation_level
 from modules.tp_resolver import resolve_structure_tps
 from modules.regime import classify_regime, regime_allows
 from modules.regime_monitor import check_btc_regime_change
+from modules.smart_entry import (
+    MULTI_CANDIDATE_ENABLED as SMART_ENTRY_ENABLED,
+    pick_entry as _pick_smart_entry,
+)
 from modules.range_strategy import find_range_signal, range_strategy_enabled
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 from modules.paper_runner import start_paper_runner
@@ -1013,35 +1017,56 @@ def _step_build_trade_setup(
         return None
 
     # ─── Entry resolution ─────────────────────────────────────────────────────
-    # First try structure-based limit at the nearest swing low (Long) or
-    # swing high (Short). If unavailable / too far / wrong-side, fall back
-    # to the legacy bid/ask offset. The label is logged + surfaced via the
-    # signal payload so we can audit fill quality per source.
-    swing_entry, swing_label = _resolve_swing_entry(df, side, bid, ask)
-    if swing_label == "swing" and swing_entry > 0:
-        entry = swing_entry
-        entry_source = "swing"
-        ref_price = ask if side == "Long" else bid
-        logger.debug(
-            f"[{symbol}] Swing entry: {entry:.6f} "
-            f"(drift {abs(entry - ref_price)/max(ref_price,1e-9):.2%} from "
-            f"{'ask' if side == 'Long' else 'bid'}={ref_price:.6f})"
-        )
-    elif LIMIT_ORDER_OFFSET_PCT > 0:
-        # FIX #6 fallback: bid/ask offset
-        if side == "Long":
-            entry = ask * (1.0 - LIMIT_ORDER_OFFSET_PCT)
+    # Smart Entry (C.1) — generate up to 4 candidates per setup
+    # (swing-1 / swing-2 / fib50 / fib61.8), score by probe R:R, pick
+    # the best one. Falls through to the legacy single-swing resolver
+    # when SMART_ENTRY_ENABLED is False so existing behaviour is
+    # preserved by config alone.
+    entry        = 0.0
+    entry_source = ""
+    if SMART_ENTRY_ENABLED:
+        # Resolve probe min_rr early so the candidate scorer can apply
+        # the bonus tier without us re-deriving regime here.
+        probe_min_rr = _resolve_min_rr(regime)
+        cand = _pick_smart_entry(df, side, bid, ask, atr, min_rr=probe_min_rr)
+        if cand is not None and cand.entry > 0:
+            entry = cand.entry
+            entry_source = cand.source         # "swing-1" | "swing-2" | "fib50" | "fib61.8"
+            logger.debug(
+                f"[{symbol}] Smart entry [{cand.source}]: {entry:.6f} "
+                f"(drift {cand.drift:.2%}, probe_rr {cand.probe_rr:.2f})"
+            )
+
+    if not entry_source:
+        # Legacy single-swing resolver (used when smart entry is
+        # disabled or produced no candidate).
+        swing_entry, swing_label = _resolve_swing_entry(df, side, bid, ask)
+        if swing_label == "swing" and swing_entry > 0:
+            entry = swing_entry
+            entry_source = "swing"
+            ref_price = ask if side == "Long" else bid
+            logger.debug(
+                f"[{symbol}] Swing entry: {entry:.6f} "
+                f"(drift {abs(entry - ref_price)/max(ref_price,1e-9):.2%} from "
+                f"{'ask' if side == 'Long' else 'bid'}={ref_price:.6f})"
+            )
+
+    if not entry_source:
+        if LIMIT_ORDER_OFFSET_PCT > 0:
+            # FIX #6 fallback: bid/ask offset
+            if side == "Long":
+                entry = ask * (1.0 - LIMIT_ORDER_OFFSET_PCT)
+            else:
+                entry = bid * (1.0 + LIMIT_ORDER_OFFSET_PCT)
+            entry_source = "offset"
+            logger.debug(
+                f"[{symbol}] Bid/ask offset entry {LIMIT_ORDER_OFFSET_PCT:.3%}: "
+                f"{'ask' if side == 'Long' else 'bid'}="
+                f"{ask if side == 'Long' else bid:.6f} → entry={entry:.6f}"
+            )
         else:
-            entry = bid * (1.0 + LIMIT_ORDER_OFFSET_PCT)
-        entry_source = "offset"
-        logger.debug(
-            f"[{symbol}] Bid/ask offset entry {LIMIT_ORDER_OFFSET_PCT:.3%}: "
-            f"{'ask' if side == 'Long' else 'bid'}="
-            f"{ask if side == 'Long' else bid:.6f} → entry={entry:.6f}"
-        )
-    else:
-        entry = ask if side == "Long" else bid
-        entry_source = "market"
+            entry = ask if side == "Long" else bid
+            entry_source = "market"
 
     # ─── SL resolution: pattern-aware → ATR fallback ─────────────────────────
     # First try to derive a stop from the pattern's structural invalidation

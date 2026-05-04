@@ -49,11 +49,27 @@ def _rvol_label(rvol):
 def _entry_source_label(source: str) -> str:
     """Human-readable label for the entry pricing strategy used.
 
-    "swing"    → limit at the most recent swing low (Long) / swing high (Short)
-    "offset"   → flat ±0.2 % bid/ask offset (legacy)
-    "market"   → unmodified bid/ask (defensive fallback only)
+    Smart Entry (C.1) sources:
+      "swing-1"  → limit at the most recent swing low/high
+      "swing-2"  → limit at the 2nd most recent swing (deeper, often
+                   higher R:R)
+      "fib50"    → 50.0% Fibonacci retracement of last impulse leg
+      "fib61.8"  → 61.8% Fibonacci retracement of last impulse leg
+
+    Legacy sources (smart entry disabled / no candidate available):
+      "swing"    → single-swing limit (legacy resolver)
+      "offset"   → flat ±0.2 % bid/ask offset
+      "market"   → unmodified bid/ask (defensive fallback only)
     """
     s = (source or "offset").lower()
+    if s == "swing-1":
+        return "Swing-1"
+    if s == "swing-2":
+        return "Swing-2"
+    if s == "fib50":
+        return "Fib 50%"
+    if s == "fib61.8":
+        return "Fib 61.8%"
     if s == "swing":
         return "Structure"
     if s == "offset":

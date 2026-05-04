@@ -84,6 +84,21 @@
     "min_rr_range": 2.0,
     "chandelier_trail_enabled": true,
     "chandelier_trail_r_mult": 1.33,
+    "smart_entry": {
+      "multi_candidate_enabled": true,
+      "max_drift_pct": 0.02,
+      "rr_bonus_mult": 1.3,
+      "swing_buffer_pct": 0.001,
+      "pivot_lookback": 60,
+      "pivot_order": 5,
+      "probe_atr_sl_mult": 1.5
+    },
+    "entry_volume_confirm": {
+      "enabled": true,
+      "min_rvol": 1.0,
+      "rvol_lookback": 20,
+      "require_rejection_wick": true
+    },
     "max_loss_per_trade_pct": 0.01,
     "mtf_confluence_enabled": true,
     "correlation_filter_enabled": true,

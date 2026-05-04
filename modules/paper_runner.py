@@ -351,7 +351,7 @@ def _execute_pending():
                 logger.warning(f"Execute pending [{sym}] — ticker kosong, skip")
                 continue
             current_price = float(ticker["last"])
-            paper_execute(trade, current_price)
+            paper_execute(trade, current_price, client=client)
         except Exception as e:
             logger.error(f"Execute pending error [{sym}]: {e}")
 

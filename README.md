@@ -376,6 +376,53 @@ The biggest section. Knobs that change *what counts as a signal* and *what the r
 | `fib_sl`        | `0.27`   | SL beyond fib retracement of impulse leg                  |
 | `fib_tp_1` / `fib_tp_2` / `fib_tp_3` | `1.0` / `1.618` / `2.618` | Default TP extensions     |
 
+### `strategy.smart_entry` — Smart Entry C.1 (multi-candidate selector)
+
+Generates up to **4 entry candidates** per setup (`swing-1`, `swing-2`,
+`fib50`, `fib61.8`), scores each by a probe R:R that uses an ATR-based
+proxy SL and a swing-extreme proxy TP, then picks the best one. The
+goal is to avoid clamping every entry to swing-1 (often too shallow);
+when the 2nd-most-recent swing or a Fibonacci 50/61.8% retracement
+gives meaningfully better R:R the picker prefers it. Falls back to the
+legacy single-swing resolver / bid-ask offset if no candidate survives
+the drift filter.
+
+| Key                       | Default | What it does                                            |
+|---------------------------|---------|---------------------------------------------------------|
+| `multi_candidate_enabled` | `true`  | Enable C.1 candidate generator. Disable to revert to the single-swing entry from PR #23. |
+| `max_drift_pct`           | `0.02`  | Reject any candidate sitting more than 2% from current price (won't fill). |
+| `rr_bonus_mult`           | `1.3`   | "Extra-reward" tier — pick the highest-probe-R:R candidate when probe R:R ≥ `min_rr × bonus_mult`. |
+| `swing_buffer_pct`        | `0.001` | Buffer past the swing (0.1 %) — same as legacy `swing_entry_buffer_pct`. |
+| `pivot_lookback`          | `60`    | Bars scanned for significant pivots / impulse leg.       |
+| `pivot_order`             | `5`     | `argrelextrema` half-window for swing detection.         |
+| `probe_atr_sl_mult`       | `1.5`   | Probe SL distance used for ranking (real SL is set later). |
+
+Telegram payload exposes the chosen source — `(Limit · Swing-1)`,
+`(Limit · Swing-2)`, `(Limit · Fib 50%)`, `(Limit · Fib 61.8%)` — so
+you can audit which candidate type fills best in your live data.
+
+### `strategy.entry_volume_confirm` — Smart Entry C.2 (volume confirmation)
+
+Once a PENDING limit is touched, the fill is gated on the most recent
+**closed** bar passing both an RVOL check and a rejection-wick check.
+This filters out false-retest wicks where price tags the level on
+near-zero volume and continues against us. If the gates fail the trade
+stays PENDING and the next runner tick re-checks the new closed bar —
+the previously-evaluated bar is persisted to `entry_confirmed_bar_ts`
+in `active_trades` so we don't waste compute re-confirming the same
+candle.
+
+| Key                       | Default | What it does                                            |
+|---------------------------|---------|---------------------------------------------------------|
+| `enabled`                 | `true`  | Enable volume gating on PAPER fills. Disable to fill on first touch (legacy). |
+| `min_rvol`                | `1.0`   | Confirmation bar volume must be ≥ `min_rvol × mean(volume)` over `rvol_lookback` prior bars. |
+| `rvol_lookback`           | `20`    | Bars used for the RVOL baseline.                         |
+| `require_rejection_wick`  | `true`  | Long: lower wick must exceed body. Short: upper wick must exceed body. Set `false` to gate on volume only. |
+
+When confirmation passes, `active_trades.entry_confirmed_at` records
+the UTC timestamp of the fill. Legacy rows (and trades filled with
+`enabled=false`) carry NULL — fully backward-compatible.
+
 ### `strategy.regime` — Regime classifier
 
 | Key                       | Default | What it does                                            |
