@@ -348,6 +348,19 @@ TP_STRUCTURE_ENABLED      = bool(STRATEGY_CFG.get("tp_structure_enabled", True))
 TP_STRUCTURE_TOL_BELOW_R  = float(STRATEGY_CFG.get("tp_structure_tol_below_r", 0.3))
 TP_STRUCTURE_TOL_ABOVE_R  = float(STRATEGY_CFG.get("tp_structure_tol_above_r", 0.5))
 
+# ─── Regime-adaptive R:R ──────────────────────────────────────────────────────
+# Different regimes need different minimum R:R thresholds:
+#   TREND_BULL / TREND_BEAR — price has runway for extended targets; demand
+#       high R:R (≥3) to filter out weak trades that won't carry to TP3.
+#   RANGE / SQUEEZE — target = opposite range bound, naturally ~1.5-2R.
+#       Demanding 3R here rejects every clean range trade. Relax to 1.5.
+#   ANOMALY — already rejected upstream, never reaches this code.
+#   UNKNOWN — fall through to neutral default (risk_reward_min).
+REGIME_ADAPTIVE_RR_ENABLED = bool(STRATEGY_CFG.get("regime_adaptive_rr_enabled", True))
+MIN_RR_TREND               = float(STRATEGY_CFG.get("min_rr_trend", 3.0))
+MIN_RR_RANGE               = float(STRATEGY_CFG.get("min_rr_range", 1.5))
+
+
 # ─── FIX #07: Candle Confirm State — DB-backed ────────────────────────────────
 # State tracker per-symbol untuk candle confirmation.
 # SEBELUMNYA: in-memory dict → hilang setiap restart bot.
@@ -951,6 +964,7 @@ def _step_build_trade_setup(
     symbol: str,
     counters: dict,
     pattern: str | None = None,
+    regime: dict | None = None,
 ) -> "dict | None":
     """
     FIX #1 + Step 12: Hitung entry/SL/TP dan validasi R:R.
@@ -1117,20 +1131,45 @@ def _step_build_trade_setup(
         return None
 
     rr     = calculate_rr(entry, sl, tp3)
-    min_rr = CONFIG["strategy"].get("risk_reward_min", 2.0)
+    min_rr = _resolve_min_rr(regime)
     if rr < min_rr:
         counters["low_rr"] += 1
-        logger.debug(f"[{symbol}] skip — R:R={rr} < min={min_rr}")
+        logger.debug(
+            f"[{symbol}] skip — R:R={rr} < min={min_rr} "
+            f"(regime={(regime or {}).get('label', 'UNKNOWN')})"
+        )
         return None
 
     return {
         "entry": float(entry), "sl":  float(sl),
         "tp1":   float(tp1),   "tp2": float(tp2), "tp3": float(tp3),
         "rr":    float(rr),
+        "min_rr_used":  float(min_rr),
         "entry_source": entry_source,   # "swing" | "offset" | "market"
         "sl_source":    sl_source,      # "pattern" | "atr"
         "tp_sources":   dict(tp_sources),  # {"tp1": "structure"|"rmultiple", ...}
     }
+
+
+def _resolve_min_rr(regime: dict | None) -> float:
+    """Return the minimum R:R threshold for the given regime.
+
+    TREND_BULL / TREND_BEAR → MIN_RR_TREND (3.0)
+    RANGE / SQUEEZE         → MIN_RR_RANGE (1.5)
+    UNKNOWN / missing       → risk_reward_min (2.0, neutral default)
+
+    Returns the legacy ``risk_reward_min`` value if the adaptive switch
+    is disabled in config.
+    """
+    legacy = float(CONFIG["strategy"].get("risk_reward_min", 2.0))
+    if not REGIME_ADAPTIVE_RR_ENABLED:
+        return legacy
+    label = (regime or {}).get("label", "UNKNOWN")
+    if label in ("TREND_BULL", "TREND_BEAR"):
+        return MIN_RR_TREND
+    if label in ("RANGE", "SQUEEZE"):
+        return MIN_RR_RANGE
+    return legacy
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1303,7 +1342,10 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
         df = scores["df"]
 
         step = "build_trade_setup"
-        setup = _step_build_trade_setup(df, ticker_info, side, symbol, counters, pattern=pattern)
+        setup = _step_build_trade_setup(
+            df, ticker_info, side, symbol, counters,
+            pattern=pattern, regime=regime,
+        )
         if setup is None:
             return None
 
