@@ -1507,6 +1507,7 @@ def scan():
             "entry_quality:ATR":   "Entry quality: ATR tidak ideal",
             "entry_quality:TP1":   "Entry quality: TP1 terlalu dekat",
             "entry_quality:SL":    "Entry quality: SL swing rule",
+            "sl_too_wide":         f"Pattern SL terlalu lebar (> {MAX_SL_PCT:.0%}) — pattern butuh terlalu banyak risk",
             "candle_wait":         "Menunggu konfirmasi candle close (FIX #5)",
             "bad_setup":           "Setup invalid (range=0)",
             "daily_trade_limit":   "Kuota trade harian sudah penuh",
