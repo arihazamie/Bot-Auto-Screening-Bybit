@@ -134,6 +134,8 @@
     "min_pattern_adx": 20,
     "min_double_gap_bars": 5,
     "min_double_reject_atr": 0.4,
+    "harmonic_tolerance": 0.08,
+    "harmonic_pivot_order": 5,
     "double_top": true,
     "double_bottom": true,
     "bull_flag": true,
@@ -141,6 +143,55 @@
     "ascending_triangle": true,
     "descending_triangle": true,
     "bullish_rectangle": true
+  },
+
+  "pattern_stats": {
+    "min_samples_actual_override": 10,
+    "rolling_window_days": 30,
+    "confidence_high": 0.65,
+    "confidence_med": 0.50
+  },
+
+  "divergence": {
+    "pivot_order": 3,
+    "min_pivots": 2,
+    "min_tf_confluence": 2
+  },
+
+  "volume_profile": {
+    "lookback": 100,
+    "bins": 50,
+    "value_area_pct": 0.70,
+    "tolerance_bin": 1
+  },
+
+  "wyckoff": {
+    "range_lookback": 30,
+    "rvol_length": 20,
+    "rvol_min": 1.3
+  },
+
+  "ict_extras": {
+    "lookback": 50,
+    "swing_order": 3,
+    "test_tolerance_atr": 0.5,
+    "displacement_atr_min": 1.5
+  },
+
+  "tp_resolver": {
+    "lookback_bars": 80,
+    "pivot_order": 4,
+    "impulse_lookback": 30
+  },
+
+  "invalidation": {
+    "default_lookback_bars": 10,
+    "min_bars_required": 5
+  },
+
+  "telegram": {
+    "rate_limit_window_sec": 60,
+    "rate_limit_max": 10
   },
 
   "pattern_signals": {

@@ -35,14 +35,17 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from modules.config_loader import CONFIG
 from modules.indicators import wilder_atr
 
 logger = logging.getLogger("ICTExtras")
 
-LOOKBACK             = 50      # how far back to scan for swings / OB candidates
-SWING_ORDER          = 3       # local-extrema window for swing detection
-TEST_TOLERANCE_A     = 0.5     # how close to the zone (in ATR) counts as a "test"
-DISPLACEMENT_ATR_MIN = 1.5     # minimum body of the displacement candle, in ATR units
+# Knobs — configurable via `ict_extras` section in config.json.
+_ICT_CFG             = CONFIG.get("ict_extras", {})
+LOOKBACK             = int(_ICT_CFG.get("lookback", 50))                      # how far back to scan for swings / OB candidates
+SWING_ORDER          = int(_ICT_CFG.get("swing_order", 3))                    # local-extrema window for swing detection
+TEST_TOLERANCE_A     = float(_ICT_CFG.get("test_tolerance_atr", 0.5))         # how close to the zone (in ATR) counts as a "test"
+DISPLACEMENT_ATR_MIN = float(_ICT_CFG.get("displacement_atr_min", 1.5))       # minimum body of the displacement candle, in ATR units
 
 
 # ─── Common helpers ──────────────────────────────────────────────────────────
