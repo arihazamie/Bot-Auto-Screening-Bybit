@@ -54,6 +54,27 @@ logger = logging.getLogger("PaperTrader")
 # Total harus 100% (0.4 + 0.3 + 0.3 = 1.0).
 TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT = CONFIG["risk"].get("tp_split", [0.4, 0.3, 0.3])
 
+# ─── ADVANCED 4/4: Chandelier trail post-TP2 ─────────────────────────────────
+# After TP2 fills the remaining 30% runs as a runner. Default trail to TP1
+# (existing behaviour) was correct but capped profit at 2R even when the move
+# was 5R+. Chandelier exit lets the runner ride extended moves: SL re-anchors
+# to the highest-high (Long) / lowest-low (Short) seen since entry, minus a
+# multiple of the trade's risk distance R.
+#
+#   trail_distance = chandelier_trail_r_mult × |entry − sl_original|
+#   Long  trail SL = highest_since_entry − trail_distance
+#   Short trail SL = lowest_since_entry  + trail_distance
+#
+# Ratchet rule: trail SL only moves in the profit direction.
+#   Long  → trail SL only goes UP   (max with previous trail and tp1 floor)
+#   Short → trail SL only goes DOWN (min with previous trail and tp1 ceiling)
+#
+# Default `chandelier_trail_r_mult = 1.33` ≈ 2 × ATR when SL = 1.5 × ATR
+# (industry standard chandelier exit). Configurable via strategy config.
+_PAPER_STRATEGY            = CONFIG.get("strategy", {})
+CHANDELIER_TRAIL_ENABLED   = bool(_PAPER_STRATEGY.get("chandelier_trail_enabled", True))
+CHANDELIER_TRAIL_R_MULT    = float(_PAPER_STRATEGY.get("chandelier_trail_r_mult", 1.33))
+
 # ─── ANOMALY HARDENING (fix G + H) ────────────────────────────────────────────
 # Real Bybit fills are not at the exact mark price. Simulate a configurable
 # slippage + spread cost so paper PnL is not optimistic vs production.
@@ -194,15 +215,79 @@ def _remaining_qty(qty: float, tp1_logged: bool, tp2_logged: bool) -> float:
     return round(remaining, 8)
 
 
+def _chandelier_trail_distance(trade: dict) -> float:
+    """Compute the chandelier offset in price terms.
+
+    Uses the trade's original risk distance R = |entry − sl_original| scaled
+    by ``CHANDELIER_TRAIL_R_MULT`` (default 1.33, ≈ 2×ATR when the original
+    SL is 1.5×ATR). Returns 0 if R cannot be derived (caller should treat as
+    "no chandelier trail available" and fall back to TP1 trail).
+    """
+    entry = float(trade.get('entry_price', 0) or 0)
+    sl0   = float(trade.get('sl_price', 0) or 0)
+    R     = abs(entry - sl0)
+    if R <= 0:
+        return 0.0
+    return R * CHANDELIER_TRAIL_R_MULT
+
+
+def _chandelier_sl(trade: dict) -> "float | None":
+    """Return chandelier-trail SL price, or ``None`` when not applicable.
+
+    Pre-conditions:
+      * Chandelier feature enabled (config flag)
+      * Trade has crossed TP2 (``chandelier_active`` flag set, or legacy
+        ``_tp2_logged`` flag with extreme already populated)
+      * highest_since_entry / lowest_since_entry has been recorded
+
+    The trail floor is the existing TP1 level — never trail tighter than the
+    TP1-trail behaviour the prior implementation provided.
+    """
+    if not CHANDELIER_TRAIL_ENABLED:
+        return None
+    if not trade.get('chandelier_active'):
+        return None
+
+    side  = trade.get('side', 'Long')
+    tp1   = float(trade.get('tp1', 0) or 0)
+    dist  = _chandelier_trail_distance(trade)
+    if dist <= 0:
+        return None
+
+    if side == 'Long':
+        ext = trade.get('highest_since_entry')
+        if ext is None:
+            return None
+        trail = float(ext) - dist
+        # Floor: never tighter than TP1
+        return max(trail, tp1) if tp1 > 0 else trail
+
+    # Short
+    ext = trade.get('lowest_since_entry')
+    if ext is None:
+        return None
+    trail = float(ext) + dist
+    # Ceiling for Short: never tighter than TP1 (which is below entry)
+    return min(trail, tp1) if tp1 > 0 else trail
+
+
 def _effective_sl(trade: dict) -> float:
     """
     SL efektif berdasarkan trailing status:
-      - Belum kena TP1  → SL original
-      - TP1 hit         → SL = entry (breakeven)
-      - TP2 hit         → SL = TP1 price
+      - Belum kena TP1   → SL original
+      - TP1 hit          → SL = entry (breakeven)
+      - TP2 hit          → SL = TP1 price (legacy) atau chandelier trail
+                                (chandelier overrides TP1 once it surpasses it)
     """
     if trade.get('_tp2_logged'):
-        return float(trade.get('tp1', trade.get('entry_price', 0)))          # trail ke TP1
+        chand = _chandelier_sl(trade)
+        tp1_trail = float(trade.get('tp1', trade.get('entry_price', 0)))
+        if chand is None:
+            return tp1_trail
+        # Ratchet: prefer the tighter (more profit-protecting) of chand vs tp1_trail
+        # which was already enforced by the floor inside _chandelier_sl, so we
+        # can return chand directly.
+        return float(chand)
     if trade.get('is_sl_moved'):
         return float(trade.get('entry_price', 0))  # breakeven
     return float(trade.get('sl_price', 0))         # original
@@ -374,13 +459,36 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
     # ✅ Balance update realtime
     new_balance = _apply_partial_balance(partial_pnl, "TP2", sym)
 
-    # ✅ SL → TP1 price (trail), flag TP2 processed
-    update_active_trade(t_id, {
+    # ✅ SL → TP1 price (trail), flag TP2 processed.
+    # Advanced 4/4: also activate chandelier trail and seed the running
+    # extreme with the current TP2 price (the price we just filled at).
+    updates = {
         "status": "OPEN_TPS_SET",
         "_tp2_logged": True,
         # effective_sl() akan baca tp1 field secara otomatis saat _tp2_logged=True
-    })
-    logger.info(f"🎯 [PAPER] {sym} TP2 → SL dipindah ke TP1 @ {tp1}")
+    }
+    if CHANDELIER_TRAIL_ENABLED:
+        updates["chandelier_active"] = True
+        if side == 'Long':
+            updates["highest_since_entry"] = float(tp2)
+            trade["highest_since_entry"]   = float(tp2)
+        else:
+            updates["lowest_since_entry"]  = float(tp2)
+            trade["lowest_since_entry"]    = float(tp2)
+        trade["chandelier_active"] = True
+    update_active_trade(t_id, updates)
+    trade["_tp2_logged"] = True
+
+    chand_note = ""
+    if CHANDELIER_TRAIL_ENABLED:
+        chand_note = (
+            f"\n🪜 Chandelier trail ACTIVE — runner SL akan ratchet "
+            f"{CHANDELIER_TRAIL_R_MULT:.2f}R di belakang harga tertinggi"
+        )
+    logger.info(
+        f"🎯 [PAPER] {sym} TP2 → SL dipindah ke TP1 @ {tp1}"
+        + (" + chandelier trail aktif" if CHANDELIER_TRAIL_ENABLED else "")
+    )
 
     cascade_note = "\n⚡ <i>Cascade: harga skip ke TP3</i>" if cascade else ""
 
@@ -395,7 +503,7 @@ def _handle_tp2_partial(trade: dict, cascade: bool = False) -> float:
         f"📊 ROI on margin <code>{_roi_on_margin(partial_pnl, partial_margin)}</code>  "
             f"<i>(dari ${partial_margin:.2f})</i>\n"
         f"💼 Balance       <code>${new_balance:.2f}</code>\n"
-        f"🔒 Stop → TP1 @ <code>{_fp(tp1)}</code>\n"
+        f"🔒 Stop → TP1 @ <code>{_fp(tp1)}</code>{chand_note}\n"
         f"⏳ Holding {TP3_CLOSE_PCT*100:.0f}% ke TP3 @ <code>{_fp(tp3)}</code>  "
             f"<i>({_pct_price(entry, tp3)})</i>{cascade_note}\n\n"
         f"<i>🕐 {datetime.now().strftime('%H:%M:%S')}</i>"
@@ -432,6 +540,23 @@ def paper_monitor(trade: dict, current_price: float):
     tp1_logged = trade.get('_tp1_logged', False)
     tp2_logged = trade.get('_tp2_logged', False)
 
+    # Advanced 4/4: ratchet running extreme for chandelier trail BEFORE
+    # computing the effective SL — so a fresh new high tightens the trail
+    # immediately. Only meaningful once chandelier_active (post-TP2).
+    if CHANDELIER_TRAIL_ENABLED and trade.get('chandelier_active'):
+        if side == 'Long':
+            prev = trade.get('highest_since_entry')
+            new_ext = max(float(prev) if prev is not None else current_price, current_price)
+            if prev is None or new_ext > float(prev):
+                trade['highest_since_entry'] = new_ext
+                update_active_trade(t_id, {"highest_since_entry": new_ext})
+        else:
+            prev = trade.get('lowest_since_entry')
+            new_ext = min(float(prev) if prev is not None else current_price, current_price)
+            if prev is None or new_ext < float(prev):
+                trade['lowest_since_entry'] = new_ext
+                update_active_trade(t_id, {"lowest_since_entry": new_ext})
+
     eff_sl = _effective_sl(trade)
 
     if side == 'Long':
@@ -460,7 +585,21 @@ def paper_monitor(trade: dict, current_price: float):
         pnl        = _calc_pnl(side, entry, exit_price, remaining)
 
         if tp2_logged:
-            reason = "SL Trail (TP1 level)"
+            # Distinguish chandelier-trail exits (runner protected by ratcheting
+            # SL above TP1) from the legacy "SL pinned at TP1" trail.
+            tp1_floor = float(trade.get('tp1', 0) or 0)
+            if (
+                CHANDELIER_TRAIL_ENABLED
+                and trade.get('chandelier_active')
+                and tp1_floor > 0
+                and (
+                    (side == 'Long'  and eff_sl > tp1_floor)
+                    or (side == 'Short' and eff_sl < tp1_floor)
+                )
+            ):
+                reason = "Chandelier Trail"
+            else:
+                reason = "SL Trail (TP1 level)"
         elif trade.get('is_sl_moved'):
             reason = "Breakeven SL"
         else:
