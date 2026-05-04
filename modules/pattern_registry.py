@@ -19,6 +19,8 @@ Sources aggregated:
   * `modules.volume_profile.detect_all` — POC / VAH / VAL reactions
   * `modules.divergence.detect_all` — RSI + MACD divergence (incl. multi-TF
     when the caller provides `multi_tf_dfs`)
+  * `modules.elliott_wave.detect_all` — Elliott Wave ABC corrective patterns
+    (zigzag / flat / irregular completions in the trend direction)
 
 Returned dict shape:
     {
@@ -50,6 +52,7 @@ import pandas as pd
 from modules import (
     candlestick_patterns,
     divergence,
+    elliott_wave,
     harmonic_patterns,
     ict_extras,
     patterns as chart_patterns,
@@ -120,6 +123,13 @@ BASELINE_WINRATES: dict[str, float] = {
     "divergence_macd":            0.55,
     "divergence_rsi_mtf":         0.65,   # multi-TF confluence boost
     "divergence_macd_mtf":        0.65,
+
+    # ── Elliott Wave (Frost & Prechter, *Elliott Wave Principle*) ──
+    # Empirical edge of completed ABC corrections in the trend direction.
+    # Conservative starting estimate; the rolling-30d actual winrate will
+    # override this once ≥10 closed paper trades carry the pattern.
+    "elliott_abc_long":           0.62,
+    "elliott_abc_short":          0.62,
 }
 
 DEFAULT_BASELINE = 0.50
@@ -307,6 +317,14 @@ def detect_all_patterns(
         logger.debug(f"divergence error: {e}")
         dv_hits = []
     hits.extend(_annotate_baseline(dv_hits, "divergence"))
+
+    # 9. Elliott Wave ABC corrective patterns
+    try:
+        ew_hits = elliott_wave.detect_all(df)
+    except Exception as e:
+        logger.debug(f"elliott_wave error: {e}")
+        ew_hits = []
+    hits.extend(_annotate_baseline(ew_hits, "elliott_wave"))
 
     return hits
 
