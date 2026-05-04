@@ -45,7 +45,8 @@ DB_PATH  = os.path.join(BASE_DIR, 'bot.db')
 # Each thread owns its own sqlite3.Connection — avoids "check_same_thread" issues.
 # WAL mode: multiple readers run in parallel; writers serialise at the DB level.
 _local    = threading.local()
-_BOOL_COLS = {'ingested', 'is_sl_moved', '_tp1_logged', '_tp2_logged'}
+_BOOL_COLS = {'ingested', 'is_sl_moved', '_tp1_logged', '_tp2_logged',
+              'chandelier_active'}
 _SAFE_COL  = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')   # column name whitelist
 
 
@@ -216,6 +217,17 @@ def init_db():
 
     _add_col_if_missing("signals",       "registry_hits_json", "TEXT")
     _add_col_if_missing("active_trades", "registry_hits_json", "TEXT")
+
+    # Advanced 4/4: Chandelier trail post-TP2.
+    # After TP2 fill the runner's SL trails to max(seen_extreme − k·R) on each
+    # new tick, ratcheting only in the profit direction. We persist:
+    #   chandelier_active     — flipped True at TP2 hit
+    #   highest_since_entry   — running max of price seen since chandelier
+    #                           became active (Long)
+    #   lowest_since_entry    — running min for Short
+    _add_col_if_missing("active_trades", "chandelier_active",   "INTEGER NOT NULL DEFAULT 0")
+    _add_col_if_missing("active_trades", "highest_since_entry", "REAL")
+    _add_col_if_missing("active_trades", "lowest_since_entry",  "REAL")
 
     # Seed paper_state (single row, never deleted)
     c.execute(

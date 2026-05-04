@@ -82,6 +82,8 @@
     "regime_adaptive_rr_enabled": true,
     "min_rr_trend": 3.0,
     "min_rr_range": 1.5,
+    "chandelier_trail_enabled": true,
+    "chandelier_trail_r_mult": 1.33,
     "max_loss_per_trade_pct": 0.01,
     "mtf_confluence_enabled": true,
     "correlation_filter_enabled": true,
