@@ -60,6 +60,18 @@ def _entry_source_label(source: str) -> str:
         return "Bid/Ask offset"
     return "Market"
 
+
+def _sl_source_label(source: str) -> str:
+    """Human-readable label for the stop-loss anchor strategy used.
+
+    "pattern" → SL anchored to the pattern's structural invalidation level
+    "atr"     → SL = entry ± ATR × N (legacy)
+    """
+    s = (source or "atr").lower()
+    if s == "pattern":
+        return "Pattern"
+    return "ATR"
+
 TG_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 # ─── Telegram API ─────────────────────────────────────────────────────────────
@@ -216,7 +228,7 @@ def send_alert(data):
             f"{SEP}\n\n"
 
             f"📍 <b>Entry</b>   <code>{format_price(entry)}</code>   <i>(Limit · {_entry_source_label(data.get('EntrySource', 'offset'))})</i>\n"
-            f"🛑 <b>Stop</b>    <code>{format_price(sl)}</code>   <i>({sl_pct})</i>\n\n"
+            f"🛑 <b>Stop</b>    <code>{format_price(sl)}</code>   <i>({sl_pct} · {_sl_source_label(data.get('SLSource', 'atr'))})</i>\n\n"
 
             f"🎯 <b>Targets</b>\n"
             f"   TP1  <code>{format_price(tp1)}</code>   <i>{tp1_pct}</i>\n"

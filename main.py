@@ -43,6 +43,7 @@ from modules.derivatives import analyze_derivatives
 from modules.smc import analyze_smc
 from modules.patterns import find_pattern, pattern_direction
 from modules.pattern_registry import detect_all_patterns
+from modules.invalidation import get_invalidation_level
 from modules.regime import classify_regime, regime_allows
 from modules.range_strategy import find_range_signal, range_strategy_enabled
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
@@ -323,6 +324,19 @@ SWING_ENTRY_BUFFER_PCT     = float(STRATEGY_CFG.get("swing_entry_buffer_pct", 0.
 SWING_ENTRY_MAX_DRIFT_PCT  = float(STRATEGY_CFG.get("swing_entry_max_drift_pct", 0.015)) # 1.5% max from current
 SWING_ENTRY_PIVOT_LOOKBACK = int(STRATEGY_CFG.get("swing_entry_pivot_lookback", 60))
 SWING_ENTRY_PIVOT_ORDER    = int(STRATEGY_CFG.get("swing_entry_pivot_order", 5))
+
+# ─── Pattern-aware SL ─────────────────────────────────────────────────────────
+# Place stop just BEYOND the pattern's structural invalidation level instead
+# of a generic ATR multiple. Each pattern type has a calibrated lookback
+# (1 bar for hammer, 30 for harmonics, etc.) — see modules.invalidation.
+#
+# When pattern_aware_sl_enabled and we have a known pattern name, the SL is
+# computed from the structural extreme + ATR buffer. Otherwise we keep the
+# legacy ATR×N stop. The MIN_SL_PCT floor still applies in both cases, and a
+# new MAX_SL_PCT cap rejects setups whose invalidation requires too much risk.
+PATTERN_AWARE_SL_ENABLED   = bool(STRATEGY_CFG.get("pattern_aware_sl_enabled", True))
+SL_INVALIDATION_BUFFER_ATR = float(STRATEGY_CFG.get("sl_invalidation_buffer_atr", 0.3))
+MAX_SL_PCT                 = float(STRATEGY_CFG.get("max_sl_pct", 0.03))   # 3% cap
 
 # ─── FIX #07: Candle Confirm State — DB-backed ────────────────────────────────
 # State tracker per-symbol untuk candle confirmation.
@@ -926,6 +940,7 @@ def _step_build_trade_setup(
     side: str,
     symbol: str,
     counters: dict,
+    pattern: str | None = None,
 ) -> "dict | None":
     """
     FIX #1 + Step 12: Hitung entry/SL/TP dan validasi R:R.
@@ -991,7 +1006,39 @@ def _step_build_trade_setup(
     else:
         entry = ask if side == "Long" else bid
         entry_source = "market"
-    sl    = (entry - atr * ATR_SL_MULTIPLIER) if side == "Long" else (entry + atr * ATR_SL_MULTIPLIER)
+
+    # ─── SL resolution: pattern-aware → ATR fallback ─────────────────────────
+    # First try to derive a stop from the pattern's structural invalidation
+    # level (e.g. below the engulfing low for a bullish engulfing, below L₃
+    # for an Elliott ABC bullish). If the pattern's lookback can be resolved,
+    # SL = invalidation ± (ATR × buffer). Otherwise fall back to ATR × N.
+    sl_atr = (entry - atr * ATR_SL_MULTIPLIER) if side == "Long" else (entry + atr * ATR_SL_MULTIPLIER)
+    sl_source = "atr"
+    if PATTERN_AWARE_SL_ENABLED and pattern:
+        invalidation = get_invalidation_level(pattern, side, df)
+        if invalidation is not None and invalidation > 0:
+            buf = atr * SL_INVALIDATION_BUFFER_ATR
+            if side == "Long":
+                sl_pattern = invalidation - buf
+                # Sanity: invalidation should sit BELOW entry (it's a low). If
+                # by chance the pattern lookback grabbed a level above entry,
+                # treat the pattern signal as inconsistent and keep ATR stop.
+                if sl_pattern < entry:
+                    sl = sl_pattern
+                    sl_source = "pattern"
+                else:
+                    sl = sl_atr
+            else:
+                sl_pattern = invalidation + buf
+                if sl_pattern > entry:
+                    sl = sl_pattern
+                    sl_source = "pattern"
+                else:
+                    sl = sl_atr
+        else:
+            sl = sl_atr
+    else:
+        sl = sl_atr
 
     # ─── FIX #02 Part A: Enforce SL Floor Minimum ─────────────────────────────
     # Pastikan SL tidak lebih dekat dari MIN_SL_PCT (0.5%) dari entry.
@@ -1012,6 +1059,20 @@ def _step_build_trade_setup(
                 f"{sl:.6f} → {sl_floor_short:.6f} (min {MIN_SL_PCT:.2%} dari entry)"
             )
             sl = sl_floor_short
+
+    # ─── MAX_SL_PCT cap ───────────────────────────────────────────────────────
+    # If the pattern's invalidation level requires too much risk (>3% from
+    # entry), the setup isn't trade-worthy at our risk profile — reject.
+    # Catches ABCD harmonics on volatile alts where X point sits 5-10 % away.
+    if MAX_SL_PCT > 0:
+        sl_pct = abs(entry - sl) / entry if entry > 0 else 0.0
+        if sl_pct > MAX_SL_PCT:
+            counters["sl_too_wide"] += 1
+            logger.debug(
+                f"[{symbol}] skip — SL {sl_pct:.2%} > MAX_SL_PCT {MAX_SL_PCT:.2%} "
+                f"(source={sl_source}, pattern={pattern})"
+            )
+            return None
 
     tp1, tp2, tp3 = build_rr_targets(entry, sl, side)
 
@@ -1036,6 +1097,7 @@ def _step_build_trade_setup(
         "tp1":   float(tp1),   "tp2": float(tp2), "tp3": float(tp3),
         "rr":    float(rr),
         "entry_source": entry_source,   # "swing" | "offset" | "market"
+        "sl_source":    sl_source,      # "pattern" | "atr"
     }
 
 
@@ -1209,7 +1271,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
         df = scores["df"]
 
         step = "build_trade_setup"
-        setup = _step_build_trade_setup(df, ticker_info, side, symbol, counters)
+        setup = _step_build_trade_setup(df, ticker_info, side, symbol, counters, pattern=pattern)
         if setup is None:
             return None
 
@@ -1265,6 +1327,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "TP1":    setup["tp1"],   "TP2": setup["tp2"], "TP3": setup["tp3"],
             "RR":     setup["rr"],
             "EntrySource": setup.get("entry_source", "offset"),
+            "SLSource":    setup.get("sl_source", "atr"),
             "Tech_Score":  int(scores["tech_score"]),
             "Quant_Score": int(scores["quant_score"]),
             "Deriv_Score": int(scores["deriv_score"]),
@@ -1444,6 +1507,7 @@ def scan():
             "entry_quality:ATR":   "Entry quality: ATR tidak ideal",
             "entry_quality:TP1":   "Entry quality: TP1 terlalu dekat",
             "entry_quality:SL":    "Entry quality: SL swing rule",
+            "sl_too_wide":         f"Pattern SL terlalu lebar (> {MAX_SL_PCT:.0%}) — pattern butuh terlalu banyak risk",
             "candle_wait":         "Menunggu konfirmasi candle close (FIX #5)",
             "bad_setup":           "Setup invalid (range=0)",
             "daily_trade_limit":   "Kuota trade harian sudah penuh",
