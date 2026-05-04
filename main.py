@@ -44,6 +44,7 @@ from modules.smc import analyze_smc
 from modules.patterns import find_pattern, pattern_direction
 from modules.pattern_registry import detect_all_patterns
 from modules.invalidation import get_invalidation_level
+from modules.tp_resolver import resolve_structure_tps
 from modules.regime import classify_regime, regime_allows
 from modules.range_strategy import find_range_signal, range_strategy_enabled
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
@@ -337,6 +338,15 @@ SWING_ENTRY_PIVOT_ORDER    = int(STRATEGY_CFG.get("swing_entry_pivot_order", 5))
 PATTERN_AWARE_SL_ENABLED   = bool(STRATEGY_CFG.get("pattern_aware_sl_enabled", True))
 SL_INVALIDATION_BUFFER_ATR = float(STRATEGY_CFG.get("sl_invalidation_buffer_atr", 0.3))
 MAX_SL_PCT                 = float(STRATEGY_CFG.get("max_sl_pct", 0.03))   # 3% cap
+
+# ─── Structure-aligned TP ─────────────────────────────────────────────────────
+# Snap TP1/TP2/TP3 to nearby swing-high / swing-low / Fibonacci-extension
+# levels when one sits within tolerance of the R-multiple default. Avoids
+# trades reversing 5-10% before TP3 because the formula didn't see that
+# TP3 sits *just past* a major resistance. See modules.tp_resolver.
+TP_STRUCTURE_ENABLED      = bool(STRATEGY_CFG.get("tp_structure_enabled", True))
+TP_STRUCTURE_TOL_BELOW_R  = float(STRATEGY_CFG.get("tp_structure_tol_below_r", 0.3))
+TP_STRUCTURE_TOL_ABOVE_R  = float(STRATEGY_CFG.get("tp_structure_tol_above_r", 0.5))
 
 # ─── FIX #07: Candle Confirm State — DB-backed ────────────────────────────────
 # State tracker per-symbol untuk candle confirmation.
@@ -1076,6 +1086,27 @@ def _step_build_trade_setup(
 
     tp1, tp2, tp3 = build_rr_targets(entry, sl, side)
 
+    # ─── Structure-aligned TP snap ────────────────────────────────────────────
+    # Try to snap each R-multiple TP to a nearby swing high/low or Fibonacci
+    # extension. Tolerance window is asymmetric: never snap CLOSER than 0.3R
+    # below default (would degrade R:R), but extend up to 0.5R past default
+    # if a strong structure level sits just beyond.
+    tp_sources = {"tp1": "rmultiple", "tp2": "rmultiple", "tp3": "rmultiple"}
+    if TP_STRUCTURE_ENABLED:
+        tp1, tp2, tp3, tp_sources = resolve_structure_tps(
+            df, side, entry, sl, tp1, tp2, tp3,
+            tol_below_r=TP_STRUCTURE_TOL_BELOW_R,
+            tol_above_r=TP_STRUCTURE_TOL_ABOVE_R,
+        )
+        snapped_count = sum(1 for v in tp_sources.values() if v == "structure")
+        if snapped_count > 0:
+            logger.debug(
+                f"[{symbol}] TP structure-snap: {snapped_count}/3 — "
+                f"tp1={tp1:.6f}({tp_sources['tp1']}) "
+                f"tp2={tp2:.6f}({tp_sources['tp2']}) "
+                f"tp3={tp3:.6f}({tp_sources['tp3']})"
+            )
+
     quality_reason = entry_quality_reject_reason(
         df, side, entry, sl, tp1, atr, swing_high, swing_low
     )
@@ -1098,6 +1129,7 @@ def _step_build_trade_setup(
         "rr":    float(rr),
         "entry_source": entry_source,   # "swing" | "offset" | "market"
         "sl_source":    sl_source,      # "pattern" | "atr"
+        "tp_sources":   dict(tp_sources),  # {"tp1": "structure"|"rmultiple", ...}
     }
 
 
@@ -1328,6 +1360,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "RR":     setup["rr"],
             "EntrySource": setup.get("entry_source", "offset"),
             "SLSource":    setup.get("sl_source", "atr"),
+            "TPSources":   setup.get("tp_sources", {}),
             "Tech_Score":  int(scores["tech_score"]),
             "Quant_Score": int(scores["quant_score"]),
             "Deriv_Score": int(scores["deriv_score"]),
