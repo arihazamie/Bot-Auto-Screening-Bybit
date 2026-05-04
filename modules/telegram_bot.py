@@ -45,6 +45,21 @@ def _rvol_label(rvol):
     if rvol > 2.0: return "Strong 🔥"
     return "Normal 🌊"
 
+
+def _entry_source_label(source: str) -> str:
+    """Human-readable label for the entry pricing strategy used.
+
+    "swing"    → limit at the most recent swing low (Long) / swing high (Short)
+    "offset"   → flat ±0.2 % bid/ask offset (legacy)
+    "market"   → unmodified bid/ask (defensive fallback only)
+    """
+    s = (source or "offset").lower()
+    if s == "swing":
+        return "Structure"
+    if s == "offset":
+        return "Bid/Ask offset"
+    return "Market"
+
 TG_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 # ─── Telegram API ─────────────────────────────────────────────────────────────
@@ -200,7 +215,7 @@ def send_alert(data):
             f"<i>{data['Pattern'].replace('_',' ').title()}  ·  {data['Timeframe']}  ·  BTC {side_dir} {data['BTC_Bias']}</i>\n"
             f"{SEP}\n\n"
 
-            f"📍 <b>Entry</b>   <code>{format_price(entry)}</code>\n"
+            f"📍 <b>Entry</b>   <code>{format_price(entry)}</code>   <i>(Limit · {_entry_source_label(data.get('EntrySource', 'offset'))})</i>\n"
             f"🛑 <b>Stop</b>    <code>{format_price(sl)}</code>   <i>({sl_pct})</i>\n\n"
 
             f"🎯 <b>Targets</b>\n"
