@@ -257,13 +257,21 @@ def _snap_to_candidate(
     """
     if not candidates:
         return None
-    lo = default_tp - tol_below_r * R
-    hi = default_tp + tol_above_r * R
 
+    # Direction-aware tolerance:
+    #   Long:  default below TP profit direction → "past default" = HIGHER price.
+    #          tol_above_r is extension cap; tol_below_r is degradation cap.
+    #          → lo = default − tol_below_r·R, hi = default + tol_above_r·R
+    #   Short: default above TP profit direction → "past default" = LOWER price.
+    #          For Short the bigger extension cap must apply DOWNWARD and the
+    #          smaller degradation cap UPWARD — so swap them.
     if side == "long":
-        # Candidates must lie above entry (resistance) and within window.
+        lo = default_tp - tol_below_r * R
+        hi = default_tp + tol_above_r * R
         in_window = [c for c in candidates if lo <= c <= hi and c > entry]
     else:
+        lo = default_tp - tol_above_r * R   # bigger cap downward (extension)
+        hi = default_tp + tol_below_r * R   # smaller cap upward (degradation)
         in_window = [c for c in candidates if lo <= c <= hi and c < entry]
 
     if not in_window:
