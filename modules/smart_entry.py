@@ -388,7 +388,14 @@ def confirm_entry_with_volume(
         logger.warning(f"volume-confirm: fetch failed for {symbol}/{timeframe}: {e}")
         return False, None, f"fetch-error:{type(e).__name__}"
 
-    if df is None or len(df) < VOLUME_RVOL_LOOKBACK + 1:
+    # We need VOLUME_RVOL_LOOKBACK baseline bars + 1 closed candidate
+    # bar (iloc[-2]) + 1 in-progress bar (iloc[-1]) = LOOKBACK + 2 min.
+    # A weaker guard (< LOOKBACK + 1) would let us reach the slice
+    # below with insufficient baseline rows; we'd then return
+    # "insufficient-baseline" but persist bar_ts in the process,
+    # causing the next tick to short-circuit on same-bar-skip even
+    # though the real issue was a thin OHLCV fetch.
+    if df is None or len(df) < VOLUME_RVOL_LOOKBACK + 2:
         return False, None, "insufficient-bars"
 
     # Bybit OHLCV returns the in-progress bar as the LAST row. We need
