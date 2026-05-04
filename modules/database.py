@@ -229,6 +229,12 @@ def init_db():
     _add_col_if_missing("active_trades", "highest_since_entry", "REAL")
     _add_col_if_missing("active_trades", "lowest_since_entry",  "REAL")
 
+    # Regime label captured at signal-generation time. Carried into
+    # active_trades so daily reports can break wins/losses down per-regime
+    # without having to JOIN through signals every time.
+    _add_col_if_missing("signals",       "regime", "TEXT")
+    _add_col_if_missing("active_trades", "regime", "TEXT")
+
     # Seed paper_state (single row, never deleted)
     c.execute(
         "INSERT OR IGNORE INTO paper_state (id, balance, updated_at) VALUES (1, ?, ?)",
@@ -246,8 +252,8 @@ def insert_signal(data: dict) -> int:
         """INSERT INTO signals
            (symbol, side, timeframe, entry_price, sl_price,
             tp1, tp2, tp3, rr, pattern, btc_bias, telegram_msg_id, ingested,
-            registry_hits_json, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)""",
+            registry_hits_json, regime, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)""",
         (
             data.get('symbol'),          data.get('side'),
             data.get('timeframe'),       data.get('entry_price'),
@@ -256,6 +262,7 @@ def insert_signal(data: dict) -> int:
             data.get('rr'),              data.get('pattern'),
             data.get('btc_bias'),        data.get('telegram_msg_id'),
             data.get('registry_hits_json'),
+            data.get('regime'),
             _utcnow_str(),
         )
     )
@@ -301,8 +308,8 @@ def insert_active_trade(data: dict) -> int:
            (signal_id, symbol, side, timeframe, entry_price, sl_price,
             tp1, tp2, tp3, quantity, leverage, mode,
             status, order_id, is_sl_moved, pnl, telegram_msg_id,
-            registry_hits_json, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            registry_hits_json, regime, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get('signal_id'),                    data.get('symbol'),
             data.get('side'),                         data.get('timeframe'),
@@ -313,6 +320,7 @@ def insert_active_trade(data: dict) -> int:
             data.get('status', 'PENDING'),            data.get('order_id'),
             _to_int(data.get('is_sl_moved', False)),  data.get('pnl', 0),
             data.get('telegram_msg_id'),              data.get('registry_hits_json'),
+            data.get('regime'),
             now, now,
         )
     )
@@ -871,6 +879,7 @@ def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
         "btc_bias":           res['BTC_Bias'],
         "telegram_msg_id":    telegram_msg_id,
         "registry_hits_json": registry_hits_json,
+        "regime":             res.get('Regime'),
     })
 
 

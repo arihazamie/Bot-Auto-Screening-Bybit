@@ -245,6 +245,9 @@ def _ingest_signals():
             # Phase 8: carry pattern_registry hits forward so the close path
             # can attribute pnl back to each detected pattern.
             "registry_hits_json": sig.get("registry_hits_json"),
+            # Regime captured at signal-generation time, propagated for
+            # per-regime daily report breakdown.
+            "regime":             sig.get("regime"),
         })
         open_count += 1
         daily_count += 1
@@ -381,6 +384,58 @@ def _monitor_trades():
 # DAILY REPORT
 # ══════════════════════════════════════════════════════════════════════════════
 
+_DAILY_REPORT_CFG = CONFIG.get("daily_report", {})
+DAILY_REPORT_SHOW_REGIME = bool(_DAILY_REPORT_CFG.get("show_regime_breakdown", True))
+
+
+def _build_regime_breakdown(trades: list) -> tuple[list[dict], str | None]:
+    """Group closed trades by regime, return (rows, summary_line).
+
+    Each row: {label, total, wins, losses, pnl, win_rate}.
+    Summary line: best/worst regime call-out (or None if only one regime).
+    """
+    by_regime: dict[str, list[float]] = {}
+    for t in trades:
+        label = (t.get("regime") or "UNKNOWN").upper()
+        by_regime.setdefault(label, []).append(float(t.get("pnl", 0)))
+
+    rows: list[dict] = []
+    order = ("TREND_BULL", "TREND_BEAR", "RANGE", "SQUEEZE", "ANOMALY", "UNKNOWN")
+    for lbl in order:
+        if lbl not in by_regime:
+            continue
+        pnls   = by_regime[lbl]
+        total  = len(pnls)
+        wins   = sum(1 for p in pnls if p > 0)
+        losses = total - wins
+        rows.append({
+            "label":    lbl,
+            "total":    total,
+            "wins":     wins,
+            "losses":   losses,
+            "pnl":      sum(pnls),
+            "win_rate": round((wins / total) * 100, 2) if total else 0.0,
+        })
+
+    summary = None
+    if len(rows) >= 2:
+        # Highlight best (highest WR with ≥2 trades) and worst (lowest
+        # WR with ≥2 trades) so users get an actionable insight, not
+        # just a table.
+        eligible = [r for r in rows if r["total"] >= 2]
+        if len(eligible) >= 2:
+            best  = max(eligible, key=lambda r: r["win_rate"])
+            worst = min(eligible, key=lambda r: r["win_rate"])
+            if best["label"] != worst["label"]:
+                summary = (
+                    f"Best: <b>{best['label']}</b> ({best['win_rate']}% WR, "
+                    f"{best['wins']}/{best['total']}) · "
+                    f"Worst: <b>{worst['label']}</b> ({worst['win_rate']}% WR, "
+                    f"{worst['wins']}/{worst['total']})"
+                )
+    return rows, summary
+
+
 def _daily_report():
     """Kirim ringkasan harian PnL ke Telegram."""
     trades = get_closed_trades_last_24h()
@@ -394,6 +449,8 @@ def _daily_report():
     pnl_sum = sum(pnls)
     balance = get_paper_balance()
 
+    regime_rows, regime_summary = _build_regime_breakdown(trades)
+
     report = {
         "mode":          MODE,
         "total_trades":  total,
@@ -404,17 +461,33 @@ def _daily_report():
         "best_trade":    max(pnls),
         "worst_trade":   min(pnls),
         "paper_balance": balance,
+        "by_regime":     regime_rows,
         "generated_at":  datetime.now(timezone.utc).isoformat(),
     }
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     save_daily_report(date_str, report)
 
-    msg = (
-        f"📊 <b>Daily Report (PAPER)</b>\n"
-        f"Trades: {total} | W/L: {wins}/{total - wins}\n"
-        f"PnL: ${pnl_sum:+.4f} | WR: {report['win_rate']}%\n"
-        f"💼 Paper Balance: <b>${balance:.2f}</b>"
-    )
+    lines = [
+        f"📊 <b>Daily Report (PAPER)</b>",
+        f"Trades: {total} | W/L: {wins}/{total - wins}",
+        f"PnL: ${pnl_sum:+.4f} | WR: {report['win_rate']}%",
+        f"💼 Paper Balance: <b>${balance:.2f}</b>",
+    ]
+
+    if DAILY_REPORT_SHOW_REGIME and regime_rows:
+        lines.append("")
+        lines.append("<b>By Regime:</b>")
+        for r in regime_rows:
+            lines.append(
+                f"  {r['label']:<11}: {r['total']} trade(s), "
+                f"{r['wins']}W {r['losses']}L "
+                f"(${r['pnl']:+.2f}, WR {r['win_rate']}%)"
+            )
+        if regime_summary:
+            lines.append("")
+            lines.append(regime_summary)
+
+    msg = "\n".join(lines)
     send(msg)
     logger.info(msg)
 
