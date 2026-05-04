@@ -343,7 +343,7 @@ def paper_execute(trade: dict, current_price: float, *, client=None) -> bool:
     confirmed_bar_ts: int | None = None
     if ENTRY_VOLUME_CONFIRM_ENABLED and client is not None:
         last_evaluated_bar = trade.get("entry_confirmed_bar_ts")
-        timeframe          = trade.get("timeframe") or "15m"
+        timeframe          = trade.get("timeframe") or CONFIG.get("system", {}).get("entry_timeframe", "15m")
         passed, bar_ts, reason = confirm_entry_with_volume(
             client,
             symbol=trade["symbol"],
