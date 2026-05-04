@@ -10,6 +10,7 @@ from logging.handlers import RotatingFileHandler
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+from scipy.signal import argrelextrema
 import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -307,6 +308,21 @@ CANDLE_CONFIRM_ENABLED  = bool(STRATEGY_CFG.get("candle_confirmation", True))
 # Short: entry = bid × (1 + offset) → sedikit di atas bid, harga lebih baik
 # Meningkatkan R:R per trade, mengurangi fill rate ~20–30% pada market volatile.
 LIMIT_ORDER_OFFSET_PCT  = float(STRATEGY_CFG.get("limit_order_offset_pct", 0.002))
+
+# ─── Structure-based limit entry ──────────────────────────────────────────────
+# Place limit orders at the nearest swing low (Long) or swing high (Short)
+# instead of a flat bid/ask offset. Falls back to LIMIT_ORDER_OFFSET_PCT when:
+#   • the swing is on the wrong side of the current price
+#   • the swing is too far away (won't fill within 6h)
+#   • pivot detection fails (insufficient data)
+#
+# The swing buffer is added so we fill on the bounce off support / rejection
+# at resistance — not exactly AT the wick low/high which often gets pierced.
+SWING_ENTRY_ENABLED        = bool(STRATEGY_CFG.get("swing_entry_enabled", True))
+SWING_ENTRY_BUFFER_PCT     = float(STRATEGY_CFG.get("swing_entry_buffer_pct", 0.001))   # 0.1% inside swing
+SWING_ENTRY_MAX_DRIFT_PCT  = float(STRATEGY_CFG.get("swing_entry_max_drift_pct", 0.015)) # 1.5% max from current
+SWING_ENTRY_PIVOT_LOOKBACK = int(STRATEGY_CFG.get("swing_entry_pivot_lookback", 60))
+SWING_ENTRY_PIVOT_ORDER    = int(STRATEGY_CFG.get("swing_entry_pivot_order", 5))
 
 # ─── FIX #07: Candle Confirm State — DB-backed ────────────────────────────────
 # State tracker per-symbol untuk candle confirmation.
@@ -769,6 +785,141 @@ def _step_score_filters(
     }
 
 
+def _resolve_swing_entry(
+    df: pd.DataFrame,
+    side: str,
+    bid: float,
+    ask: float,
+) -> tuple[float, str]:
+    """Resolve a structure-aware limit entry price.
+
+    Long  → most-recent significant swing **low** + buffer
+            (buy on retest of support)
+    Short → most-recent significant swing **high** − buffer
+            (sell on retest of resistance)
+
+    Pivot detection uses :func:`scipy.signal.argrelextrema` with plateau
+    collapse — runs of equal-value bars are folded into a single pivot at
+    the most extreme bar — then we pick the most recent pivot of the
+    correct kind. If no plateau-cleaned pivot exists, we fall back to the
+    rolling extreme of the lookback window (``low.min()`` / ``high.max()``)
+    as the structurally most significant level.
+
+    Returns ``(entry_price, label)`` where label is one of:
+      * ``"swing"``    — structure-based entry resolved & validated
+      * ``"fallback"`` — fell back to bid/ask offset (one of the validations
+                         below failed). Caller applies LIMIT_ORDER_OFFSET_PCT.
+
+    Validation order (any failure → fallback):
+      1. ≥1 valid pivot of the correct kind in the lookback window
+      2. Swing on the correct side of current price
+         (Long: swing_low < ask; Short: swing_high > bid)
+      3. Drift |entry − current| / current ≤ ``SWING_ENTRY_MAX_DRIFT_PCT``
+         (limit too far from market won't fill within 6h)
+    """
+    if not SWING_ENTRY_ENABLED:
+        return (0.0, "fallback")
+
+    if df is None or len(df) < SWING_ENTRY_PIVOT_ORDER * 2 + 1:
+        return (0.0, "fallback")
+
+    # Restrict pivot search to the trailing lookback window so older swings
+    # (no longer relevant after structure shifts) don't pollute the result.
+    window = df.tail(SWING_ENTRY_PIVOT_LOOKBACK).reset_index(drop=True)
+    highs = window["high"].to_numpy(dtype=float)
+    lows  = window["low"].to_numpy(dtype=float)
+
+    try:
+        if side == "Long":
+            swing_low = _last_significant_low(lows)
+            if swing_low <= 0 or ask <= 0:
+                return (0.0, "fallback")
+            # Side check: support must sit BELOW current ask
+            if swing_low >= ask:
+                return (0.0, "fallback")
+            # Add a small upward buffer — we want to fill on the bounce off
+            # support, not at the exact wick low which often gets pierced.
+            entry = swing_low * (1.0 + SWING_ENTRY_BUFFER_PCT)
+            drift = abs(entry - ask) / ask
+            if drift > SWING_ENTRY_MAX_DRIFT_PCT:
+                return (0.0, "fallback")
+            return (entry, "swing")
+
+        # Short
+        swing_high = _last_significant_high(highs)
+        if swing_high <= 0 or bid <= 0:
+            return (0.0, "fallback")
+        if swing_high <= bid:
+            return (0.0, "fallback")
+        entry = swing_high * (1.0 - SWING_ENTRY_BUFFER_PCT)
+        drift = abs(entry - bid) / bid
+        if drift > SWING_ENTRY_MAX_DRIFT_PCT:
+            return (0.0, "fallback")
+        return (entry, "swing")
+
+    except Exception as e:
+        logger.debug(f"_resolve_swing_entry error ({type(e).__name__}: {e}) — falling back")
+        return (0.0, "fallback")
+
+
+def _last_significant_low(lows: np.ndarray) -> float:
+    """Most-recent significant swing low in the lookback window.
+
+    Strategy:
+      1. Find raw local minima via argrelextrema(np.less_equal, order=N).
+      2. Drop bars that sit on a flat plateau (equal to the rolling baseline)
+         — they aren't structurally interesting and pollute the "most recent"
+         selection in flat markets.
+      3. Pick the most recent surviving pivot.
+      4. If nothing survives, fall back to the deepest low across the entire
+         window — there's still some structure even on flat charts and we
+         prefer the strongest level visible.
+    """
+    if lows.size == 0:
+        return 0.0
+    raw = argrelextrema(lows, np.less_equal, order=SWING_ENTRY_PIVOT_ORDER)[0]
+    if len(raw) == 0:
+        return float(lows.min())
+    # Plateau filter: keep bars that are strictly below the surrounding
+    # neighbourhood's median. This excludes runs of equal-value flat bars
+    # whose "≤" relation is technically true but isn't a real pivot.
+    surviving: list[int] = []
+    for i in raw:
+        lo = max(0, int(i) - SWING_ENTRY_PIVOT_ORDER)
+        hi = min(len(lows), int(i) + SWING_ENTRY_PIVOT_ORDER + 1)
+        neighbourhood = lows[lo:hi]
+        if neighbourhood.size == 0:
+            continue
+        median = float(np.median(neighbourhood))
+        if float(lows[i]) < median:
+            surviving.append(int(i))
+    if not surviving:
+        return float(lows.min())
+    return float(lows[surviving[-1]])
+
+
+def _last_significant_high(highs: np.ndarray) -> float:
+    """Mirror of :func:`_last_significant_low` for swing highs."""
+    if highs.size == 0:
+        return 0.0
+    raw = argrelextrema(highs, np.greater_equal, order=SWING_ENTRY_PIVOT_ORDER)[0]
+    if len(raw) == 0:
+        return float(highs.max())
+    surviving: list[int] = []
+    for i in raw:
+        lo = max(0, int(i) - SWING_ENTRY_PIVOT_ORDER)
+        hi = min(len(highs), int(i) + SWING_ENTRY_PIVOT_ORDER + 1)
+        neighbourhood = highs[lo:hi]
+        if neighbourhood.size == 0:
+            continue
+        median = float(np.median(neighbourhood))
+        if float(highs[i]) > median:
+            surviving.append(int(i))
+    if not surviving:
+        return float(highs.max())
+    return float(highs[surviving[-1]])
+
+
 def _step_build_trade_setup(
     df: pd.DataFrame,
     ticker_info: dict,
@@ -810,21 +961,36 @@ def _step_build_trade_setup(
         logger.debug(f"[{symbol}] skip — last_price=0 (ticker stale?)")
         return None
 
-    entry = ask if side == "Long" else bid
-
-    # FIX #6: Limit Order Zone — offset 0.1–0.3% dari bid/ask untuk harga entry lebih baik
-    # Long : entry sedikit di bawah ask  → pending buy limit, fill saat ada retrace kecil
-    # Short: entry sedikit di atas bid   → pending sell limit, fill saat ada bounce kecil
-    if LIMIT_ORDER_OFFSET_PCT > 0:
+    # ─── Entry resolution ─────────────────────────────────────────────────────
+    # First try structure-based limit at the nearest swing low (Long) or
+    # swing high (Short). If unavailable / too far / wrong-side, fall back
+    # to the legacy bid/ask offset. The label is logged + surfaced via the
+    # signal payload so we can audit fill quality per source.
+    swing_entry, swing_label = _resolve_swing_entry(df, side, bid, ask)
+    if swing_label == "swing" and swing_entry > 0:
+        entry = swing_entry
+        entry_source = "swing"
+        ref_price = ask if side == "Long" else bid
+        logger.debug(
+            f"[{symbol}] Swing entry: {entry:.6f} "
+            f"(drift {abs(entry - ref_price)/max(ref_price,1e-9):.2%} from "
+            f"{'ask' if side == 'Long' else 'bid'}={ref_price:.6f})"
+        )
+    elif LIMIT_ORDER_OFFSET_PCT > 0:
+        # FIX #6 fallback: bid/ask offset
         if side == "Long":
             entry = ask * (1.0 - LIMIT_ORDER_OFFSET_PCT)
         else:
             entry = bid * (1.0 + LIMIT_ORDER_OFFSET_PCT)
+        entry_source = "offset"
         logger.debug(
-            f"[{symbol}] Limit order offset {LIMIT_ORDER_OFFSET_PCT:.3%}: "
+            f"[{symbol}] Bid/ask offset entry {LIMIT_ORDER_OFFSET_PCT:.3%}: "
             f"{'ask' if side == 'Long' else 'bid'}="
             f"{ask if side == 'Long' else bid:.6f} → entry={entry:.6f}"
         )
+    else:
+        entry = ask if side == "Long" else bid
+        entry_source = "market"
     sl    = (entry - atr * ATR_SL_MULTIPLIER) if side == "Long" else (entry + atr * ATR_SL_MULTIPLIER)
 
     # ─── FIX #02 Part A: Enforce SL Floor Minimum ─────────────────────────────
@@ -869,6 +1035,7 @@ def _step_build_trade_setup(
         "entry": float(entry), "sl":  float(sl),
         "tp1":   float(tp1),   "tp2": float(tp2), "tp3": float(tp3),
         "rr":    float(rr),
+        "entry_source": entry_source,   # "swing" | "offset" | "market"
     }
 
 
@@ -1097,6 +1264,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "Entry":  setup["entry"], "SL":  setup["sl"],
             "TP1":    setup["tp1"],   "TP2": setup["tp2"], "TP3": setup["tp3"],
             "RR":     setup["rr"],
+            "EntrySource": setup.get("entry_source", "offset"),
             "Tech_Score":  int(scores["tech_score"]),
             "Quant_Score": int(scores["quant_score"]),
             "Deriv_Score": int(scores["deriv_score"]),
