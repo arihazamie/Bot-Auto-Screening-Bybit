@@ -481,6 +481,30 @@ The biggest section. Knobs that change *what counts as a signal* and *what the r
 | `rate_limit_window_sec` | `60`    | Rolling window for command rate limit              |
 | `rate_limit_max`        | `10`    | Max commands per chat_id per window                |
 
+### `regime_alerts` — BTC global regime change notifications
+
+When the BTC 1h regime classification changes between scans, the bot sends a Telegram alert (e.g. *"BTC: TREND_BULL → ANOMALY — new entries auto-paused"*). The previous regime is persisted in `state_store` so transitions are detected across restarts.
+
+| Key                | Default            | What it does                                                                                       |
+|--------------------|--------------------|----------------------------------------------------------------------------------------------------|
+| `enabled`          | `true`             | Master switch for regime change alerts                                                             |
+| `btc_symbol`       | `BTC/USDT:USDT`    | CCXT symbol used to fetch BTC OHLCV                                                                |
+| `timeframe`        | `1h`               | Timeframe for regime classification                                                                |
+| `candles`          | `200`              | Number of bars to fetch (≥ 120 enforced)                                                           |
+| `notify_first_run` | `false`            | Send an informational alert on the very first classification (when no previous regime is stored)   |
+
+### `scan_summary` — Scan-end console output
+
+| Key                        | Default | What it does                                                                                  |
+|----------------------------|---------|-----------------------------------------------------------------------------------------------|
+| `show_regime_distribution` | `true`  | After each scan, print how many watchlist symbols fell into each regime (TREND/RANGE/etc.)    |
+
+### `daily_report` — Daily PnL Telegram message
+
+| Key                       | Default | What it does                                                                                                |
+|---------------------------|---------|-------------------------------------------------------------------------------------------------------------|
+| `show_regime_breakdown`   | `true`  | Append a *By Regime* section listing trade count + W/L + WR + PnL per regime, plus best/worst regime call-out |
+
 ### Patterns NOT exposed as config
 
 Some pattern definitions are *part of the pattern itself* and would corrupt the detector if tweaked:

@@ -46,6 +46,7 @@ from modules.pattern_registry import detect_all_patterns
 from modules.invalidation import get_invalidation_level
 from modules.tp_resolver import resolve_structure_tps
 from modules.regime import classify_regime, regime_allows
+from modules.regime_monitor import check_btc_regime_change
 from modules.range_strategy import find_range_signal, range_strategy_enabled
 from modules.watchlist import refresh_watchlist, get_watchlist, get_watchlist_info
 from modules.paper_runner import start_paper_runner
@@ -110,6 +111,12 @@ LTF_REQUIRE_CLOSE = bool(_LTF_CFG.get("require_close_in_direction", True))
 
 _REGIME_CFG          = CONFIG.get("strategy", {}).get("regime", {})
 REGIME_SKIP_ANOMALY  = bool(_REGIME_CFG.get("skip_when_anomaly", True))
+
+# A.4: scan-end regime distribution snapshot. Controlled via
+# `scan_summary` section in config.json so users can disable the
+# extra output if they prefer terse logs.
+_SCAN_SUMMARY_CFG       = CONFIG.get("scan_summary", {})
+SCAN_SUMMARY_SHOW_REGIME = bool(_SCAN_SUMMARY_CFG.get("show_regime_distribution", True))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -606,6 +613,12 @@ def _step_technicals_and_pattern(
     """
     df      = get_technicals(df)
     regime  = classify_regime(df)
+
+    # A.4: track regime distribution across the watchlist for the
+    # scan-end summary block. Uses a separate "regime:LABEL" namespace
+    # so it doesn't collide with the existing filter labels and is
+    # filtered out before "Filter Breakdown" is rendered.
+    counters[f"regime:{regime['label']}"] += 1
 
     if regime["label"] == "ANOMALY" and REGIME_SKIP_ANOMALY:
         counters["regime_anomaly"] += 1
@@ -1411,6 +1424,7 @@ def analyze_ticker(symbol: str, btc_bias: str, active_signals: set, counters: di
             "Zeta_Score": float(scores["zeta_score"]),
             "OBI":        float(scores["obi"]),
             "BTC_Bias":   btc_bias,
+            "Regime":     regime.get("label", "UNKNOWN"),
             "MTF_Confluence": confluence_label,        # FIX #08
             "Reason":     pattern,
             "Tech_Reasons":  ", ".join(str(r) for r in scores["tech_reasons"]),
@@ -1508,6 +1522,17 @@ def scan():
     btc_bias = get_btc_bias()
     logger.info(f"📊 BTC Bias ({TREND_TF}): {btc_bias}")
 
+    # A.2: detect BTC regime shifts and notify on transitions.
+    # Returns the freshly-classified regime dict (or UNKNOWN on failure)
+    # so the rest of the scan can surface macro context in logs even
+    # when alerts are disabled.
+    btc_regime = check_btc_regime_change(client)
+    if btc_regime.get("label") and btc_regime["label"] != "UNKNOWN":
+        logger.info(
+            f"🌐 BTC Regime ({btc_regime.get('timeframe', '1h')}): "
+            f"{btc_regime['label']} — {btc_regime.get('reason', '')}"
+        )
+
     active_signals = get_active_signals()
     logger.info(f"🛡️  Active Signals (skip duplicate): {len(active_signals)}")
 
@@ -1557,6 +1582,33 @@ def scan():
 
     finally:
         duration = time.time() - start_time
+
+        # ── A.4: Regime distribution snapshot ────────────────────────────
+        # `counters["regime:LABEL"]` was incremented in
+        # `_step_compute_indicators_and_pattern`. Pull those out, render
+        # a separate block, and exclude them from "Filter Breakdown" so
+        # the existing table stays focused on rejection reasons.
+        regime_counts = {
+            k.split(":", 1)[1]: v for k, v in counters.items()
+            if k.startswith("regime:")
+        }
+        for k in list(counters.keys()):
+            if k.startswith("regime:"):
+                del counters[k]
+
+        regime_total = sum(regime_counts.values())
+        if SCAN_SUMMARY_SHOW_REGIME and regime_total > 0:
+            print()
+            print(f"🌐 Regime distribution — {regime_total} pairs classified:")
+            order = ("TREND_BULL", "TREND_BEAR", "RANGE", "SQUEEZE", "ANOMALY", "UNKNOWN")
+            for lbl in order:
+                n = regime_counts.get(lbl, 0)
+                if n == 0:
+                    continue
+                pct = n / regime_total * 100
+                bar = "█" * min(int(pct / 2), 40)
+                tag = "  — skipped" if lbl == "ANOMALY" else ""
+                print(f"   {lbl:<11} : {n:>4} ({pct:5.1f}%)  {bar}{tag}")
 
         # ── Filter Breakdown ────────────────────────────────────────────
         total_filtered = sum(counters.values())

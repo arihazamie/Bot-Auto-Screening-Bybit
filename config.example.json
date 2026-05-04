@@ -194,6 +194,22 @@
     "rate_limit_max": 10
   },
 
+  "regime_alerts": {
+    "enabled": true,
+    "btc_symbol": "BTC/USDT:USDT",
+    "timeframe": "1h",
+    "candles": 200,
+    "notify_first_run": false
+  },
+
+  "scan_summary": {
+    "show_regime_distribution": true
+  },
+
+  "daily_report": {
+    "show_regime_breakdown": true
+  },
+
   "pattern_signals": {
     "double_bottom": "Long",
     "double_top": "Short",
