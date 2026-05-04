@@ -72,6 +72,15 @@ def _sl_source_label(source: str) -> str:
         return "Pattern"
     return "ATR"
 
+
+def _tp_source_marker(source: str) -> str:
+    """Compact marker for per-TP source labels in Telegram alerts.
+
+    "structure" → "★" (snapped to swing/Fib level)
+    "rmultiple" → ""  (default 1R / 2R / 3R)
+    """
+    return "★" if (source or "").lower() == "structure" else ""
+
 TG_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 # ─── Telegram API ─────────────────────────────────────────────────────────────
@@ -164,6 +173,12 @@ def send_alert(data):
         tp2_pct = _pct(entry, tp2)
         tp3_pct = _pct(entry, tp3)
 
+        # Per-TP source marker (★ if snapped to structure)
+        tp_sources = data.get("TPSources", {}) or {}
+        tp1_mark = _tp_source_marker(tp_sources.get("tp1", "rmultiple"))
+        tp2_mark = _tp_source_marker(tp_sources.get("tp2", "rmultiple"))
+        tp3_mark = _tp_source_marker(tp_sources.get("tp3", "rmultiple"))
+
         # ── Scores ──────────────────────────────────────────────────────
         t_sc = data['Tech_Score']
         s_sc = data['SMC_Score']
@@ -230,10 +245,10 @@ def send_alert(data):
             f"📍 <b>Entry</b>   <code>{format_price(entry)}</code>   <i>(Limit · {_entry_source_label(data.get('EntrySource', 'offset'))})</i>\n"
             f"🛑 <b>Stop</b>    <code>{format_price(sl)}</code>   <i>({sl_pct} · {_sl_source_label(data.get('SLSource', 'atr'))})</i>\n\n"
 
-            f"🎯 <b>Targets</b>\n"
-            f"   TP1  <code>{format_price(tp1)}</code>   <i>{tp1_pct}</i>\n"
-            f"   TP2  <code>{format_price(tp2)}</code>   <i>{tp2_pct}</i>\n"
-            f"   TP3  <code>{format_price(tp3)}</code>   <i>{tp3_pct}</i>\n"
+            f"🎯 <b>Targets</b>  <i>(★ = snapped to structure)</i>\n"
+            f"   TP1{tp1_mark}  <code>{format_price(tp1)}</code>   <i>{tp1_pct}</i>\n"
+            f"   TP2{tp2_mark}  <code>{format_price(tp2)}</code>   <i>{tp2_pct}</i>\n"
+            f"   TP3{tp3_mark}  <code>{format_price(tp3)}</code>   <i>{tp3_pct}</i>\n"
             f"   ⚖️ R:R  <code>1 : {rr}</code>\n\n"
 
             f"{SEP2}\n"
