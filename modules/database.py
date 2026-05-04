@@ -205,6 +205,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_ps_closed      ON pattern_stats (closed_at);
     """)
 
+    # ── Idempotent schema migrations ─────────────────────────────────────────
+    # SQLite has no `ADD COLUMN IF NOT EXISTS`, so we PRAGMA-introspect first.
+    # Phase 8: registry_hits_json carries the pattern_registry hits from
+    # signal → active_trade so paper-trader close can attribute outcomes.
+    def _add_col_if_missing(table: str, col: str, decl: str) -> None:
+        existing = {r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in existing:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+    _add_col_if_missing("signals",       "registry_hits_json", "TEXT")
+    _add_col_if_missing("active_trades", "registry_hits_json", "TEXT")
+
     # Seed paper_state (single row, never deleted)
     c.execute(
         "INSERT OR IGNORE INTO paper_state (id, balance, updated_at) VALUES (1, ?, ?)",
@@ -221,8 +233,9 @@ def insert_signal(data: dict) -> int:
     cur = c.execute(
         """INSERT INTO signals
            (symbol, side, timeframe, entry_price, sl_price,
-            tp1, tp2, tp3, rr, pattern, btc_bias, telegram_msg_id, ingested, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?)""",
+            tp1, tp2, tp3, rr, pattern, btc_bias, telegram_msg_id, ingested,
+            registry_hits_json, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)""",
         (
             data.get('symbol'),          data.get('side'),
             data.get('timeframe'),       data.get('entry_price'),
@@ -230,6 +243,7 @@ def insert_signal(data: dict) -> int:
             data.get('tp2'),             data.get('tp3'),
             data.get('rr'),              data.get('pattern'),
             data.get('btc_bias'),        data.get('telegram_msg_id'),
+            data.get('registry_hits_json'),
             _utcnow_str(),
         )
     )
@@ -275,8 +289,8 @@ def insert_active_trade(data: dict) -> int:
            (signal_id, symbol, side, timeframe, entry_price, sl_price,
             tp1, tp2, tp3, quantity, leverage, mode,
             status, order_id, is_sl_moved, pnl, telegram_msg_id,
-            created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            registry_hits_json, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get('signal_id'),                    data.get('symbol'),
             data.get('side'),                         data.get('timeframe'),
@@ -286,7 +300,8 @@ def insert_active_trade(data: dict) -> int:
             data.get('leverage'),                     data.get('mode'),
             data.get('status', 'PENDING'),            data.get('order_id'),
             _to_int(data.get('is_sl_moved', False)),  data.get('pnl', 0),
-            data.get('telegram_msg_id'),              now, now,
+            data.get('telegram_msg_id'),              data.get('registry_hits_json'),
+            now, now,
         )
     )
     c.commit()
@@ -809,18 +824,167 @@ def purge_old_data(
 
 
 def save_signal_to_db(res: dict, telegram_msg_id: int = None) -> int:
-    """Convert analyze_ticker result → signal queue entry."""
+    """Convert analyze_ticker result → signal queue entry. Phase 8: serialise
+    pattern_registry hits as JSON so the paper-trader close path can attribute
+    pnl back to each detected pattern."""
+    hits = res.get("RegistryHits") or []
+    # Strip non-serialisable junk defensively (the registry already returns
+    # plain dicts of primitives, but a future detector might attach numpy types).
+    safe_hits: list[dict] = []
+    for h in hits:
+        if not isinstance(h, dict):
+            continue
+        safe_hits.append({
+            "name":     str(h.get("name", "")),
+            "side":     str(h.get("side", "")),
+            "details":  str(h.get("details", "")),
+            "baseline": float(h["baseline"]) if h.get("baseline") is not None else None,
+            "source":   str(h.get("source", "")),
+        })
+    registry_hits_json = json.dumps(safe_hits) if safe_hits else None
+
     return insert_signal({
-        "symbol":          res['Symbol'],
-        "side":            res['Side'],
-        "timeframe":       res['Timeframe'],
-        "entry_price":     res['Entry'],
-        "sl_price":        res['SL'],
-        "tp1":             res['TP1'],
-        "tp2":             res['TP2'],
-        "tp3":             res['TP3'],
-        "rr":              res['RR'],
-        "pattern":         res['Pattern'],
-        "btc_bias":        res['BTC_Bias'],
-        "telegram_msg_id": telegram_msg_id,
+        "symbol":             res['Symbol'],
+        "side":               res['Side'],
+        "timeframe":          res['Timeframe'],
+        "entry_price":        res['Entry'],
+        "sl_price":           res['SL'],
+        "tp1":                res['TP1'],
+        "tp2":                res['TP2'],
+        "tp3":                res['TP3'],
+        "rr":                 res['RR'],
+        "pattern":            res['Pattern'],
+        "btc_bias":           res['BTC_Bias'],
+        "telegram_msg_id":    telegram_msg_id,
+        "registry_hits_json": registry_hits_json,
     })
+
+
+# ─── Pattern-attribution close hook ────────────────────────────────────────────
+
+def record_trade_close_outcomes(
+    trade_id: int,
+    *,
+    symbol: str,
+    side: str,
+    pnl: float,
+    qty: float | None = None,
+    opened_at: str | None = None,
+    closed_at: str | None = None,
+    breakeven_band_pct: float = 0.0005,
+) -> int:
+    """Walk the closed trade's stored ``registry_hits_json`` and emit one
+    :func:`record_pattern_outcome` row per attributed pattern.
+
+    Outcome mapping:
+      * ``win``       — ``pnl > +breakeven_band_pct × position_value``
+      * ``loss``      — ``pnl < -breakeven_band_pct × position_value``
+      * ``breakeven`` — within the band (or exactly zero)
+
+    The caller MUST pass the ``qty`` that was actually closed in this leg —
+    not the original full position size. ``_close_paper_trade`` invokes this
+    after partial TP fills (TP1 40% + TP2 30% can leave 30% on the final
+    leg), so using ``active_trades.quantity`` (the original full qty) would
+    inflate the band ~3.3× and silently mislabel TP3 wins as breakeven.
+
+    For trades that pre-date the phase-8 schema migration (i.e.
+    ``registry_hits_json`` is NULL), falls back to the originating
+    ``signals.pattern`` text column and emits one row using
+    ``baseline_for(pattern)`` so historical trades still feed pattern_stats.
+
+    Returns the number of pattern_stats rows inserted. Failures are logged
+    but never raised — pattern stats are advisory; we don't want a JSON
+    decode error to abort the close path.
+    """
+    import logging
+    log = logging.getLogger("PatternStats")
+    try:
+        row = _conn().execute(
+            "SELECT registry_hits_json, entry_price, quantity, signal_id "
+            "FROM active_trades WHERE id = ?",
+            (trade_id,),
+        ).fetchone()
+    except Exception as e:
+        log.warning(f"trade {trade_id} close-attribution lookup failed: {e}")
+        return 0
+    if row is None:
+        return 0
+
+    entry = float(row["entry_price"] or 0.0)
+    # Prefer the explicit ``qty`` passed by the caller (the actually-closed
+    # portion); fall back to the row's full quantity only when the caller
+    # didn't tell us. This is the partial-TP correctness fix from
+    # Devin Review on PR #21.
+    if qty is None or qty <= 0:
+        qty = float(row["quantity"] or 0.0)
+    else:
+        qty = float(qty)
+    # Position-value is what we measure pnl against. The breakeven band must
+    # be in dollar terms because ``pnl`` is total-dollar PnL (price diff × qty
+    # less fees). Comparing dollar pnl to a per-unit price band silently
+    # mislabels nearly every BTC trade as breakeven when the actual move is
+    # a routine ±1%.
+    position_value = entry * qty
+    if position_value > 0:
+        band = position_value * breakeven_band_pct
+    else:
+        # Defensive fallback for legacy rows without quantity recorded
+        band = abs(entry) * breakeven_band_pct
+    if pnl > band:
+        outcome = "win"
+    elif pnl < -band:
+        outcome = "loss"
+    else:
+        outcome = "breakeven"
+
+    try:
+        hits_raw = row["registry_hits_json"]
+        hits = json.loads(hits_raw) if hits_raw else []
+    except (TypeError, ValueError) as e:
+        log.warning(f"trade {trade_id} registry_hits_json decode failed: {e}")
+        hits = []
+
+    # ── Backward-compat: pre-phase-8 trades have no registry_hits_json.
+    # Fall back to the primary pattern label on the originating signal so
+    # legacy trades closing after the migration still feed pattern_stats.
+    if not hits and row["signal_id"]:
+        try:
+            from modules.pattern_registry import baseline_for
+            sig_row = _conn().execute(
+                "SELECT pattern FROM signals WHERE id = ?",
+                (row["signal_id"],),
+            ).fetchone()
+            if sig_row and sig_row["pattern"]:
+                pat = str(sig_row["pattern"]).strip()
+                if pat:
+                    hits = [{"name": pat, "baseline": baseline_for(pat)}]
+        except Exception as e:
+            log.debug(f"trade {trade_id} legacy-pattern fallback failed: {e}")
+
+    # ``pnl_pct`` is the price-change percentage (= ROI on notional) so it
+    # stays comparable across coins with very different prices/quantities.
+    if position_value > 0:
+        pnl_pct = pnl / position_value * 100.0
+    else:
+        pnl_pct = 0.0
+    n = 0
+    seen: set[str] = set()
+    for h in hits:
+        name = str(h.get("name", "")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            record_pattern_outcome(
+                name,
+                symbol=symbol,
+                side=side,
+                outcome=outcome,
+                pnl_pct=pnl_pct,
+                opened_at=opened_at,
+                closed_at=closed_at,
+            )
+            n += 1
+        except Exception as e:
+            log.warning(f"record_pattern_outcome({name!r}) failed: {e}")
+    return n

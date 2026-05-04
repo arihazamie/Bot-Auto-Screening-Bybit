@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from modules.config_loader import CONFIG
 from modules.database import insert_trade, get_trades_open, get_state, set_state
+from modules.signal_formatter import format_pattern_block_html
 
 logger = logging.getLogger("TelegramBot")
 
@@ -184,6 +185,15 @@ def send_alert(data):
         else:
             confluence_line = ""
 
+        # ── Phase 8: Pattern registry block (baseline + actual winrate) ──────
+        registry_hits = data.get('RegistryHits') or []
+        try:
+            registry_block = format_pattern_block_html(registry_hits)
+        except Exception as e:
+            logger.debug(f"format_pattern_block_html failed: {e}")
+            registry_block = ""
+        registry_section = f"{SEP2}\n{registry_block}\n\n" if registry_block else ""
+
         text = (
             f"{SEP}\n"
             f"<b>{side_ico}</b>  ·  <b>{symbol}</b>\n"
@@ -215,6 +225,7 @@ def send_alert(data):
             f"   Basis   <code>{basis_pct:+.4f}%</code>\n"
             f"{confluence_line}\n"
 
+            f"{registry_section}"
             f"💡 <i>{reason_line}</i>\n\n"
 
             f"{SEP2}\n"

@@ -40,6 +40,7 @@ from modules.database import (
     add_paper_balance,
     update_active_trade,
     get_active_trades_by_status,
+    record_trade_close_outcomes,
 )
 from modules.notifier import send_reply
 
@@ -539,6 +540,26 @@ def _close_paper_trade(
     """Tutup paper trade, update balance, kirim notifikasi Telegram."""
     new_balance = add_paper_balance(pnl)   # atomic increment (fix #1B)
     update_active_trade(trade_id, {"status": "CLOSED", "pnl": pnl})
+
+    # ── Phase 8: pattern attribution ────────────────────────────────────────
+    # Walk the registry hits stored on this active_trade and emit one
+    # pattern_stats row per pattern so the rolling-30d actual winrate stays
+    # current. Best-effort: errors are logged and swallowed inside.
+    # NOTE: pass the *remaining* qty that was actually closed in this leg —
+    # after partial TP1+TP2 fills only ~30% may remain. Using the original
+    # full quantity would inflate the breakeven band ~3.3× and mislabel
+    # decisive TP3 wins as breakeven.
+    try:
+        n_attr = record_trade_close_outcomes(
+            trade_id, symbol=symbol, side=side, pnl=pnl, qty=qty,
+        )
+        if n_attr:
+            logger.debug(
+                f"[PAPER] {symbol} attributed close to {n_attr} pattern(s) "
+                f"(pnl={pnl:+.4f})"
+            )
+    except Exception as e:
+        logger.warning(f"[PAPER] {symbol} pattern-attribution failed: {e}")
 
     is_win   = pnl >= 0
     emoji    = "✅" if is_win else "❌"
