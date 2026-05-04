@@ -32,12 +32,16 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from modules.config_loader import CONFIG
+
 logger = logging.getLogger("VolumeProfile")
 
-VP_LOOKBACK   = 100
-VP_BINS       = 50
-VA_PCT        = 0.70
-TOLERANCE_BIN = 1   # how many bin-widths of slack qualifies as "near" a level
+# Knobs — configurable via `volume_profile` section in config.json.
+_VP_CFG       = CONFIG.get("volume_profile", {})
+VP_LOOKBACK   = int(_VP_CFG.get("lookback", 100))
+VP_BINS       = int(_VP_CFG.get("bins", 50))
+VA_PCT        = float(_VP_CFG.get("value_area_pct", 0.70))
+TOLERANCE_BIN = int(_VP_CFG.get("tolerance_bin", 1))   # how many bin-widths of slack qualifies as "near" a level
 
 
 def _build_profile(df: pd.DataFrame, lookback: int = VP_LOOKBACK, bins: int = VP_BINS) -> dict | None:

@@ -50,8 +50,10 @@ _paused = threading.Event()
 # _RATE_LIMIT_WINDOW detik, untuk mencegah spam atau loop otomatis.
 # Dict tidak perlu Lock karena GIL Python melindungi operasi sederhana
 # seperti get/set pada dict — cukup untuk penggunaan ini.
-_RATE_LIMIT_WINDOW = 60       # detik
-_RATE_LIMIT_MAX    = 10       # perintah per window
+# Knobs — configurable via `telegram` section in config.json.
+_TG_CFG            = CONFIG.get("telegram", {})
+_RATE_LIMIT_WINDOW = int(_TG_CFG.get("rate_limit_window_sec", 60))   # detik
+_RATE_LIMIT_MAX    = int(_TG_CFG.get("rate_limit_max", 10))          # perintah per window
 _rate_buckets: dict[str, list[float]] = {}   # { str(chat_id): [timestamp, ...] }
 
 

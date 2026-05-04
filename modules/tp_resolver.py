@@ -43,14 +43,20 @@ import numpy as np
 import pandas as pd
 from scipy.signal import argrelextrema
 
+from modules.config_loader import CONFIG
+
 logger = logging.getLogger(__name__)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_LOOKBACK_BARS  = 80    # swing-pivot detection window
-DEFAULT_PIVOT_ORDER    = 4     # bars each side for argrelextrema
-DEFAULT_IMPULSE_LOOKBACK = 30  # bars for last impulse leg
-DEFAULT_TOL_BELOW_R    = 0.3   # don't snap CLOSER than (default - 0.3R)
-DEFAULT_TOL_ABOVE_R    = 0.5   # extend up to (default + 0.5R) past default
+# Knobs configurable via `tp_resolver` section in config.json.
+# Tolerances `tol_below_r`/`tol_above_r` are read in `main.py` as the
+# strategy-level keys `tp_structure_tol_below_r` / `tp_structure_tol_above_r`.
+_TP_CFG                  = CONFIG.get("tp_resolver", {})
+DEFAULT_LOOKBACK_BARS    = int(_TP_CFG.get("lookback_bars", 80))      # swing-pivot detection window
+DEFAULT_PIVOT_ORDER      = int(_TP_CFG.get("pivot_order", 4))         # bars each side for argrelextrema
+DEFAULT_IMPULSE_LOOKBACK = int(_TP_CFG.get("impulse_lookback", 30))   # bars for last impulse leg
+DEFAULT_TOL_BELOW_R      = 0.3   # don't snap CLOSER than (default - 0.3R)
+DEFAULT_TOL_ABOVE_R      = 0.5   # extend up to (default + 0.5R) past default
 
 # Fibonacci extensions (anchored to impulse leg)
 FIB_EXTENSIONS = (1.0, 1.272, 1.382, 1.618, 2.0, 2.618)

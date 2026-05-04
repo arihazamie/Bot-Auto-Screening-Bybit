@@ -27,11 +27,15 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from modules.config_loader import CONFIG
+
 logger = logging.getLogger("WyckoffPatterns")
 
-RANGE_LOOKBACK = 30   # how many candles defines the "trading range"
-RVOL_LENGTH    = 20   # volume MA window
-RVOL_MIN       = 1.3  # current volume must be ≥ 1.3 × rolling mean to count
+# Knobs — configurable via `wyckoff` section in config.json.
+_WY_CFG        = CONFIG.get("wyckoff", {})
+RANGE_LOOKBACK = int(_WY_CFG.get("range_lookback", 30))   # how many candles defines the "trading range"
+RVOL_LENGTH    = int(_WY_CFG.get("rvol_length", 20))      # volume MA window
+RVOL_MIN       = float(_WY_CFG.get("rvol_min", 1.3))      # current volume must be ≥ this × rolling mean to count
 
 
 def _rvol(df: pd.DataFrame, length: int = RVOL_LENGTH) -> float:

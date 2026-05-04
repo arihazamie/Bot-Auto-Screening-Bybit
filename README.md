@@ -7,8 +7,6 @@ A Python **signal-only screener** that scans Bybit USDT-Perpetual futures every 
 > - Signals can still lose money if you act on them. Always paper-test for 1–2 weeks before trusting any signal blindly.
 > - This is not financial advice.
 
-> **Notice (Phase 1 of refactor):** Real-trading (`auto_trade`) was removed. `auto_trades.py` is gone, `auto_trade` no longer exists in config. Sections of this README still describe the old auto-trade mode and will be rewritten in a later phase. Treat any mention of "auto trade" / "real orders" as historical until the rewrite lands.
-
 ---
 
 ## Table of contents
@@ -18,14 +16,13 @@ A Python **signal-only screener** that scans Bybit USDT-Perpetual futures every 
 3. [Step-by-step setup](#step-by-step-setup)
 4. [Running the bot](#running-the-bot)
 5. [Telegram commands](#telegram-commands)
-6. [Paper mode vs auto-trade mode](#paper-mode-vs-auto-trade-mode)
-7. [How the bot decides to trade](#how-the-bot-decides-to-trade)
-8. [Where the data lives](#where-the-data-lives)
-9. [Common config knobs](#common-config-knobs)
-10. [Troubleshooting](#troubleshooting)
-11. [Updating the bot](#updating-the-bot)
-12. [Project layout](#project-layout)
-13. [Disclaimer](#disclaimer)
+6. [How the bot decides to trade](#how-the-bot-decides-to-trade)
+7. [Where the data lives](#where-the-data-lives)
+8. [Config reference](#config-reference)
+9. [Troubleshooting](#troubleshooting)
+10. [Updating the bot](#updating-the-bot)
+11. [Project layout](#project-layout)
+12. [Disclaimer](#disclaimer)
 
 ---
 
@@ -132,19 +129,11 @@ This is the only **mandatory** credential. Without it the bot will refuse to sta
 
 > Want signals in a group? Add the bot to the group, send a message in the group, then re-check `getUpdates`. The group chat ID will be a negative number like `-1001234567890`.
 
-### 4. (Optional) Get a Bybit API key
+### 4. (Optional) Bybit API key
 
-You only need this if you plan to enable real trading later (`auto_trade: true`). For paper mode, leave the placeholders.
+The bot is signal-only and pulls all candle data from public endpoints, so a Bybit API key is **not required**. Leave the placeholders in `config.json`.
 
-1. Sign up / log in at [bybit.com](https://www.bybit.com).
-2. Go to **API → Create New Key → System-generated**.
-3. Permissions you need:
-   - **Contract → Orders & Positions** (read + write)
-   - **Wallet → Account Transfer** is **NOT** needed
-4. **Important**: enable **IP whitelist** with your bot's static IP. If you don't have one, you can leave it open but it's much less safe.
-5. Copy the API key and secret into `api.bybit_key` and `api.bybit_secret`.
-
-> **Never share your API key, never commit it to Git.** The bot reads it from `config.json` which is `.gitignore`'d.
+> **Never share API keys or commit them to Git.** The bot reads everything from `config.json`, which is `.gitignore`'d.
 
 ### 5. Fill in `config.json`
 
@@ -221,13 +210,13 @@ Then `sudo systemctl enable --now bybit-bot`.
 
 ## Telegram commands
 
-Send these to your bot in Telegram. They work whether the bot is in paper or real mode.
+Send these to your bot in Telegram.
 
 | Command   | What it does                                          |
 |-----------|-------------------------------------------------------|
-| `/status` | Current mode, uptime, watchlist size, daily counters  |
-| `/balance`| Paper balance (paper mode) or Bybit USDT (real mode)  |
-| `/trades` | All currently open trades                             |
+| `/status` | Current uptime, watchlist size, daily counters        |
+| `/balance`| Paper portfolio balance (USDT)                        |
+| `/trades` | All currently open paper trades                       |
 | `/report` | Force-send today's daily report                       |
 | `/pause`  | Stop opening new trades (existing ones keep running)  |
 | `/resume` | Resume opening new trades                             |
@@ -236,38 +225,29 @@ Send these to your bot in Telegram. They work whether the bot is in paper or rea
 
 ---
 
-## Paper mode vs auto-trade mode
-
-| Feature                          | Paper (`auto_trade: false`) | Auto-trade (`auto_trade: true`) |
-|----------------------------------|-----------------------------|---------------------------------|
-| Real orders on Bybit             | No                          | **Yes — real money**            |
-| Bybit API key needed             | Optional                    | **Required**                    |
-| Slippage / spread simulated      | Yes (5 bps + 2 bps default) | Real exchange fills             |
-| TP/SL execution                  | Simulated against live price| Native Bybit limit orders       |
-| Telegram alerts                  | Yes                         | Yes                             |
-| Daily limits enforced            | Yes                         | Yes                             |
-| Bot lock-step with Bybit API     | No (read-only public data)  | Yes — full account access       |
-
-**Strong recommendation:** run paper mode for at least 7–14 calendar days (including a weekend) before flipping `auto_trade: true`. Compare the simulated PnL with what you'd expect — if paper mode loses money, real mode will lose more.
-
----
-
 ## How the bot decides to trade
 
 On startup the bot scans once immediately (using the most recent already-closed candles), then keeps scanning right after every 15m candle close. On each scan, the bot:
 
-1. **Picks the watchlist**: top 100 USDT-perp pairs by 24h volume, refreshed daily.
+1. **Picks the watchlist**: top **300** USDT-perp pairs by 24h volume, refreshed daily at 07:00 local time.
 2. **Filters by regime**: classifies each symbol as `TREND_BULL`, `TREND_BEAR`, `RANGE`, `SQUEEZE`, or `ANOMALY`. Anomalies are skipped entirely.
-3. **Runs the strategy stack**:
+3. **Runs the pattern + strategy stack**:
    - Multi-timeframe trend (15m + 1h Supertrend / EMA)
    - Smart Money Concepts (BOS, CHoCH, order blocks, liquidity sweeps)
    - Chart patterns (double top/bottom, flags, triangles, rectangles) with volume gate
+   - **Pattern registry**: 28+ pattern detectors (candlestick, harmonic XABCD, ICT/SMC extras, Wyckoff Spring/Upthrust, Volume Profile POC/VAH/VAL, RSI/MACD divergence single-TF + multi-TF, Elliott Wave ABC corrective)
    - Quant metrics (Zeta Field, RVOL, OBI, Z-score)
    - Derivatives (funding rate, basis, CVD divergence)
 4. **Scores everything** and only generates a signal if min-scores in every layer pass.
 5. **Confirms on 5m**: requires 1 closed 5m candle in the signal direction before executing.
-6. **Sizes the position** based on `risk_percent`, leverage, and a hard cap of `max_loss_per_trade_pct`.
-7. **Sends the signal to Telegram**, inserts a pending paper/real order, and monitors fill + TP/SL.
+6. **Structure-aware setup**:
+   - **Entry**: limit order at the nearest swing low (Long) / swing high (Short) ± 0.1% buffer
+   - **SL**: anchored to the pattern's invalidation level (e.g., bullish ABC → below L₃; Order Block → below OB low) with an ATR buffer
+   - **TPs**: snapped to nearby swing highs/lows or Fibonacci extensions of the impulse leg, falling back to 1R/2R/3R when no structure is in window
+   - **R:R floor**: regime-adaptive (default 2.0 across all regimes; can be tuned per regime)
+   - **Runner trail**: after TP2 fills, the remaining 30% trails via a chandelier exit (highest_seen − 1.33R for Long), capping legacy TP1-trail behavior
+7. **Sends the signal to Telegram** with pattern winrate (baseline / actual / sample count, HIGH/MED/LOW confidence label).
+8. **Tracks paper fills** and updates rolling 30-day pattern winrate stats on close.
 
 Daily safety limits stop new entries when:
 
@@ -299,29 +279,215 @@ The bot will recreate it with the starting paper balance from `config.json` (`ri
 
 ---
 
-## Common config knobs
+## Config reference
 
-These are the ones beginners are most likely to want to change. Everything else has sensible defaults.
+The bot reads everything from `config.json`. Almost every threshold, lookback, and tolerance is configurable so you can tune behavior without touching code. Sections below mirror the structure of `config.example.json` — copy it to `config.json` and adjust whatever you want.
 
-| Key                                 | Default          | Meaning                                        |
-|-------------------------------------|------------------|------------------------------------------------|
-| `auto_trade`                        | `false`          | `true` to place real orders. **Be careful.**   |
-| `risk.paper_balance`                | `100.0`          | Starting balance for paper mode (USDT)         |
-| `risk.risk_percent`                 | `0.01`           | 1% of balance risked per trade                 |
-| `risk.max_positions`                | `2`              | Concurrent open trades                         |
-| `risk.max_daily_trades`             | `2`              | Hard cap on new entries per day                |
-| `risk.max_daily_loss_pct`           | `0.008`          | Stop trading after −0.8% day                   |
-| `risk.daily_profit_target_pct`      | `0.012`          | Stop trading after +1.2% day                   |
-| `risk.target_leverage`              | `10`             | Used when `use_max_leverage` is `false`        |
-| `risk.use_max_leverage`             | `true`           | `true` = use Bybit's max leverage per coin     |
-| `risk.max_leverage_cap`             | `100`            | Hard cap regardless of exchange max            |
-| `system.skip_weekends`              | `true`           | Skip Saturday and Sunday                       |
-| `system.timezone`                   | `"Asia/Jakarta"` | Timezone for the daily report scheduler        |
-| `system.scan_post_close_buffer_sec` | `5`              | Wait N seconds after candle close before scan  |
-| `strategy.min_adx`                  | `22`             | Minimum trend strength to take a trade         |
-| `strategy.risk_reward_min`          | `3.0`            | Reject trades with R:R < 3.0                   |
+> **Pro tip:** if a key isn't in your `config.json`, the bot falls back to the default shown below. You only need to override the ones you actually want to change.
 
-For the full list of strategy parameters, open `config.example.json` — every key is grouped by purpose.
+### `system` — Scan timing & timeframes
+
+| Key                            | Default          | What it does                                                                |
+|--------------------------------|------------------|-----------------------------------------------------------------------------|
+| `timezone`                     | `"Asia/Jakarta"` | Timezone for the daily report scheduler (07:00 local)                       |
+| `max_threads`                  | `20`             | Parallel scan threads                                                       |
+| `check_interval_minutes`       | `15`             | Scan cadence (matches `entry_timeframe` candle close)                       |
+| `entry_timeframe`              | `"15m"`          | Primary signal TF                                                           |
+| `trend_timeframe`              | `"1h"`           | Higher TF for trend bias                                                    |
+| `confirm_timeframe`            | `"5m"`           | LTF for entry confirmation                                                  |
+| `min_candles_analysis`         | `150`            | Skip symbols with fewer closed candles                                      |
+| `watchlist_top_n`              | `300`            | How many top USDT-perp pairs to scan                                        |
+| `active_hours_utc`             | `[6, 22]`        | Only scan within this UTC window                                            |
+| `skip_weekends`                | `true`           | Skip Saturday and Sunday                                                    |
+| `skip_hours_utc`               | `[]`             | Extra UTC hours to skip (e.g. major news windows)                           |
+| `watchlist_max_age_hours`      | `36`             | Refuse to use a watchlist older than this                                   |
+| `scan_post_close_buffer_sec`   | `5`              | Wait N seconds after candle close before scan (lets exchange settle)        |
+
+### `risk` — Money & position management
+
+| Key                            | Default | What it does                                                                  |
+|--------------------------------|---------|-------------------------------------------------------------------------------|
+| `paper_balance`                | `100.0` | Starting balance for paper portfolio (USDT)                                   |
+| `risk_percent`                 | `0.01`  | Fraction of balance risked per trade (1%)                                     |
+| `max_positions`                | `2`     | Concurrent open paper trades                                                  |
+| `max_daily_trades`             | `2`     | Hard cap on new entries per day                                               |
+| `max_daily_loss_pct`           | `0.008` | Stop opening trades after −0.8% on the day                                    |
+| `daily_profit_target_pct`      | `0.012` | Stop opening trades after +1.2% on the day                                    |
+| `pending_expire_hours`         | `3`     | Cancel a pending limit order if it hasn't filled in this many hours           |
+| `tp_split`                     | `[0.4, 0.3, 0.3]` | TP1 / TP2 / TP3 partial-close fractions                                |
+| `atr_sl_multiplier`            | `1.5`   | ATR multiplier for the SL distance (legacy SL path)                           |
+| `atr_sl_length`                | `14`    | ATR period                                                                    |
+| `target_leverage`              | `10`    | Default leverage for paper sizing                                             |
+| `use_max_leverage`             | `true`  | If true, use Bybit's per-coin max (capped by `max_leverage_cap`)              |
+| `max_leverage_cap`             | `100`   | Hard cap on leverage regardless of exchange max                               |
+| `paper_slippage_bps`           | `5`     | Simulated slippage on paper fills (5 bps = 0.05%)                             |
+| `paper_spread_bps`             | `2`     | Simulated bid/ask spread                                                      |
+| `paper_max_spread_bps`         | `50`    | Reject fills if spread exceeds this (gapped market)                           |
+
+### `strategy` — Filters, gates, structure
+
+The biggest section. Knobs that change *what counts as a signal* and *what the resulting entry/SL/TP looks like*.
+
+| Key                              | Default | What it does                                                              |
+|----------------------------------|---------|---------------------------------------------------------------------------|
+| `min_tech_score`                 | `3`     | Minimum technical confluence score                                        |
+| `min_quant_score`                | `3`     | Minimum quant confluence score                                            |
+| `min_smc_score`                  | `4`     | Minimum SMC confluence score                                              |
+| `min_deriv_score`                | `2`     | Minimum derivatives score                                                 |
+| `risk_reward_min`                | `2.0`   | Floor R:R when regime-adaptive is off / regime is `UNKNOWN`               |
+| `min_adx`                        | `22`    | Minimum trend strength                                                    |
+| `min_atr_pct` / `max_atr_pct`    | `0.003` / `0.015` | ATR% must be in this band                                       |
+| `min_tp1_distance_pct`           | `0.004` | TP1 must be ≥ this fraction away from entry (filters chop)                |
+| `require_sl_beyond_swing`        | `true`  | SL must sit beyond the recent swing extreme                               |
+| `sl_swing_buffer_atr`            | `0.3`   | Extra ATR buffer past the swing for the SL                                |
+| `btc_bias_adx_min`               | `25`    | BTC ADX gate for direction bias                                           |
+| `candle_confirmation`            | `true`  | Require the candle that triggered the pattern to fully close              |
+| `limit_order_offset_pct`         | `0.002` | Fallback offset for non-structure entries (0.2%)                          |
+| `swing_entry_enabled`            | `true`  | Use structure-based limit at nearest swing low/high                       |
+| `swing_entry_buffer_pct`         | `0.001` | Buffer past the swing (0.1%)                                              |
+| `swing_entry_max_drift_pct`      | `0.015` | Reject swing entry if it sits >1.5% from current price                    |
+| `swing_entry_pivot_lookback`     | `60`    | Bars to scan for swing pivots                                             |
+| `swing_entry_pivot_order`        | `5`     | argrelextrema half-window                                                 |
+| `min_sl_pct` / `max_sl_pct`      | `0.005` / `0.03` | Floor/cap on SL distance as fraction of entry                    |
+| `pattern_aware_sl_enabled`       | `true`  | Anchor SL to pattern invalidation level instead of pure ATR               |
+| `sl_invalidation_buffer_atr`     | `0.3`   | ATR buffer past the invalidation extreme                                  |
+| `tp_structure_enabled`           | `true`  | Snap TPs to swing/Fib structure                                           |
+| `tp_structure_tol_below_r`       | `0.3`   | Don't snap TP closer than `default − 0.3R`                                |
+| `tp_structure_tol_above_r`       | `0.5`   | Allow TP to extend up to `default + 0.5R` past structure                  |
+| `regime_adaptive_rr_enabled`     | `true`  | Use per-regime R:R thresholds                                             |
+| `min_rr_trend`                   | `2.0`   | Min R:R for `TREND_BULL` / `TREND_BEAR`                                   |
+| `min_rr_range`                   | `2.0`   | Min R:R for `RANGE` / `SQUEEZE`                                           |
+| `chandelier_trail_enabled`       | `true`  | Trail runner SL post-TP2                                                  |
+| `chandelier_trail_r_mult`        | `1.33`  | Trail distance in R (1.33 ≈ 2×ATR when SL = 1.5×ATR)                      |
+| `mtf_confluence_enabled`         | `true`  | Require multi-TF agreement                                                |
+| `correlation_filter_enabled`     | `true`  | Reject trades that just duplicate exposure to an open trade               |
+| `correlation_threshold`          | `0.7`   | Pearson r above which two symbols count as correlated                     |
+| `correlation_lookback`           | `50`    | Bars used for correlation calc                                            |
+| `correlation_sector_max`         | `1`     | Max concurrent trades per sector                                          |
+| `max_funding_long` / `min_funding_short` | `0.0008` / `−0.0008` | Skip Long/Short when funding is extreme       |
+| `cvd_lookback`                   | `30`    | Bars for CVD divergence                                                   |
+| `cvd_min_adx`                    | `20`    | Skip CVD signal in choppy regimes                                         |
+
+### `setup` — Fibonacci levels for legacy entry/TP/SL math
+
+| Key             | Default  | What it does                                              |
+|-----------------|----------|-----------------------------------------------------------|
+| `fib_entry_start` / `fib_entry_end` | `0.5` / `0.618` | Entry retracement zone of impulse leg |
+| `fib_sl`        | `0.27`   | SL beyond fib retracement of impulse leg                  |
+| `fib_tp_1` / `fib_tp_2` / `fib_tp_3` | `1.0` / `1.618` / `2.618` | Default TP extensions     |
+
+### `strategy.regime` — Regime classifier
+
+| Key                       | Default | What it does                                            |
+|---------------------------|---------|---------------------------------------------------------|
+| `trend_adx`               | `22`    | ADX threshold for `TREND_BULL` / `TREND_BEAR`           |
+| `anomaly_atr_pct`         | `0.025` | ATR% threshold for `ANOMALY` (auto-skip)                |
+| `squeeze_bbw_pct` / `range_bbw_pct` | `0.20` / `0.50` | BBWidth thresholds for SQUEEZE / RANGE   |
+| `lookback`                | `120`   | Bars used for regime inputs                             |
+| `skip_when_anomaly`       | `true`  | Hard-skip ANOMALY regime entirely                       |
+
+### `strategy.range` — RANGE-regime mean-revert config
+
+| Key                            | Default | What it does                                       |
+|--------------------------------|---------|----------------------------------------------------|
+| `enabled`                      | `true`  | Toggle range strategy                              |
+| `bb_length` / `bb_std`         | `20` / `2.0` | Bollinger Band parameters                     |
+| `rsi_oversold` / `rsi_overbought` | `30` / `70` | RSI bands                                  |
+| `squeeze_breakout_volume_mult` | `1.5`   | RVOL required for squeeze breakout                 |
+
+### `strategy.ltf_confirmation` — 5m confirmation gate
+
+| Key                          | Default | What it does                                              |
+|------------------------------|---------|-----------------------------------------------------------|
+| `enabled`                    | `true`  | Toggle 5m confirmation                                    |
+| `lookback_bars`              | `3`     | How many 5m bars must agree                               |
+| `require_close_in_direction` | `true`  | Latest 5m close must align with signal direction          |
+
+### `patterns` — Chart pattern detectors
+
+| Key                       | Default | What it does                                                  |
+|---------------------------|---------|---------------------------------------------------------------|
+| `tolerance`               | `0.015` | ±1.5% tolerance for pattern boundary equality                 |
+| `volume_multiplier`       | `1.8`   | Required RVOL on the breakout candle                          |
+| `min_pattern_adx`         | `20`    | Min ADX to take a pattern                                     |
+| `min_double_gap_bars`     | `5`     | Min bars between the two tops/bottoms                         |
+| `min_double_reject_atr`   | `0.4`   | Required wick rejection in ATR units                          |
+| `harmonic_tolerance`      | `0.08`  | ±8% Fibonacci tolerance for XABCD harmonic patterns           |
+| `harmonic_pivot_order`    | `5`     | Pivot detection window for harmonic XABCD                     |
+| `double_top` / `double_bottom` / `bull_flag` / `bear_flag` / `ascending_triangle` / `descending_triangle` / `bullish_rectangle` | `true` | Toggle individual chart patterns |
+
+### `pattern_stats` — Rolling 30-day winrate & confidence labels
+
+| Key                            | Default | What it does                                                                 |
+|--------------------------------|---------|------------------------------------------------------------------------------|
+| `min_samples_actual_override`  | `10`    | Sample count needed before "actual winrate" overrides the literature baseline |
+| `rolling_window_days`          | `30`    | Rolling window for winrate aggregation                                       |
+| `confidence_high`              | `0.65`  | Winrate ≥ this → HIGH confidence label                                       |
+| `confidence_med`               | `0.50`  | Winrate ≥ this → MED label (else LOW)                                        |
+
+### `divergence` — RSI/MACD divergence + multi-TF confluence
+
+| Key                  | Default | What it does                                              |
+|----------------------|---------|-----------------------------------------------------------|
+| `pivot_order`        | `3`     | Bars each side for argrelextrema                          |
+| `min_pivots`         | `2`     | Minimum pivots required for a divergence                  |
+| `min_tf_confluence`  | `2`     | Number of TFs that must agree for a multi-TF hit          |
+
+### `volume_profile` — POC / VAH / VAL detector
+
+| Key              | Default | What it does                                       |
+|------------------|---------|----------------------------------------------------|
+| `lookback`       | `100`   | Bars in the profile window                         |
+| `bins`           | `50`    | Histogram bin count                                |
+| `value_area_pct` | `0.70`  | Value Area = X% of volume                          |
+| `tolerance_bin`  | `1`     | Bin-widths of slack to count price as "near a level" |
+
+### `wyckoff` — Spring / Upthrust detection
+
+| Key              | Default | What it does                                       |
+|------------------|---------|----------------------------------------------------|
+| `range_lookback` | `30`    | How many bars defines the trading range            |
+| `rvol_length`    | `20`    | Volume MA window                                   |
+| `rvol_min`       | `1.3`   | Required RVOL on the spring/upthrust candle        |
+
+### `ict_extras` — Breaker / Mitigation block detection
+
+| Key                    | Default | What it does                                                 |
+|------------------------|---------|--------------------------------------------------------------|
+| `lookback`             | `50`    | How far back to scan for swings / OB candidates              |
+| `swing_order`          | `3`     | argrelextrema half-window for swing detection                |
+| `test_tolerance_atr`   | `0.5`   | How close to a zone (in ATR) counts as a "test"              |
+| `displacement_atr_min` | `1.5`   | Min displacement-candle body in ATR units                    |
+
+### `tp_resolver` — Structure-aligned TP snap
+
+| Key               | Default | What it does                                       |
+|-------------------|---------|----------------------------------------------------|
+| `lookback_bars`   | `80`    | Bars scanned for swing-pivot candidates            |
+| `pivot_order`     | `4`     | argrelextrema half-window                          |
+| `impulse_lookback`| `30`    | Bars for the last impulse leg (Fib anchor)         |
+
+### `invalidation` — Pattern-aware SL anchor
+
+| Key                     | Default | What it does                                           |
+|-------------------------|---------|--------------------------------------------------------|
+| `default_lookback_bars` | `10`    | Fallback lookback for unknown / unmapped patterns      |
+| `min_bars_required`     | `5`     | Minimum bars before attempting to compute invalidation |
+
+### `telegram` — Telegram command rate limit
+
+| Key                     | Default | What it does                                       |
+|-------------------------|---------|----------------------------------------------------|
+| `rate_limit_window_sec` | `60`    | Rolling window for command rate limit              |
+| `rate_limit_max`        | `10`    | Max commands per chat_id per window                |
+
+### Patterns NOT exposed as config
+
+Some pattern definitions are *part of the pattern itself* and would corrupt the detector if tweaked:
+
+- **Elliott Wave ABC**: Fibonacci ratios for B retrace (38.2%–95%) and C extension (61.8%–200%) are pattern definitions, not knobs.
+- **Harmonic XABCD**: Per-pattern Fibonacci ratios (Gartley/Bat/Butterfly/Crab/Shark) are Carney's definitions.
+- **Pattern baseline winrates**: Sourced from literature (Bulkowski, Carney, Pruden, Steidlmayer/Dalton, ICT material). Override happens automatically once `pattern_stats.min_samples_actual_override` paper trades have closed.
 
 ---
 
@@ -380,25 +546,35 @@ If a new release adds new config keys, the bot will tell you on startup. You can
 
 ```
 .
-├── main.py                       # entry point — scheduler & scan loop
-├── auto_trades.py                # real-order execution (auto_trade=true)
-├── config.example.json           # config template
+├── main.py                       # entry point — scheduler, scan loop, signal pipeline
+├── config.example.json           # config template (copy to config.json)
 ├── requirements.txt
 └── modules/
     ├── config_loader.py          # validates config.json on startup
     ├── exchange.py               # Bybit client (ccxt) — retry, leverage cache
-    ├── database.py               # SQLite — atomic balance, signal claim
+    ├── database.py               # SQLite — signals, active trades, paper_state, pattern_stats
     ├── leverage.py               # per-coin max leverage resolver
-    ├── watchlist.py              # daily top-volume pair refresh
-    ├── technicals.py             # EMA, MACD, Stoch RSI, ADX, divergence
+    ├── watchlist.py              # daily top-N USDT-perp by volume
+    ├── indicators.py             # ATR, ADX, RSI, Stoch RSI, MACD primitives
+    ├── technicals.py             # EMA, MACD, Stoch RSI, ADX, MTF confluence
     ├── smc.py                    # Smart Money Concepts (BOS/CHoCH/OB/sweep)
     ├── patterns.py               # chart patterns (DT/DB, flags, triangles)
-    ├── quant.py                  # Zeta Field, RVOL, Z-score, OBI
+    ├── candlestick_patterns.py   # 13 candlestick formations
+    ├── harmonic_patterns.py      # Gartley/Bat/Butterfly/Crab/Shark XABCD
+    ├── ict_extras.py             # Breaker / Mitigation block detectors
+    ├── wyckoff_patterns.py       # Spring / Upthrust
+    ├── volume_profile.py         # POC / VAH / VAL reaction & rejection
+    ├── divergence.py             # RSI/MACD regular divergence (single + multi-TF)
+    ├── elliott_wave.py           # Elliott Wave ABC corrective detector
+    ├── pattern_registry.py       # central aggregator + literature baseline winrates
+    ├── signal_formatter.py       # Telegram pattern-stats payload renderer
+    ├── invalidation.py           # pattern-aware SL invalidation level resolver
+    ├── tp_resolver.py            # structure-aligned TP snap (swing + Fib)
     ├── derivatives.py            # funding rate, basis, CVD divergence
     ├── regime.py                 # market regime classifier
     ├── range_strategy.py         # mean-revert + breakout for RANGE regime
-    ├── paper_trader.py           # paper fill simulation, slippage, PnL
-    ├── paper_runner.py           # paper runner daemon (ingest/execute/monitor)
+    ├── paper_trader.py           # paper fill simulation, slippage, chandelier trail
+    ├── paper_runner.py           # paper runner daemon (ingest / execute / monitor)
     ├── telegram_bot.py           # alerts, dashboard, scan completion
     ├── telegram_commands.py      # /status, /pause, /resume, /report ...
     └── notifier.py               # send/send_reply with retry-aware Telegram

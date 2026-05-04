@@ -39,11 +39,15 @@ import pandas as pd
 import pandas_ta as ta
 from scipy.signal import argrelextrema
 
+from modules.config_loader import CONFIG
+
 logger = logging.getLogger("Divergence")
 
-PIVOT_ORDER         = 3
-MIN_PIVOTS          = 2
-MIN_TF_CONFLUENCE   = 2     # ≥2 TFs must agree for a multi-TF hit
+# Knobs — configurable via `divergence` section in config.json.
+_DIV_CFG            = CONFIG.get("divergence", {})
+PIVOT_ORDER         = int(_DIV_CFG.get("pivot_order", 3))
+MIN_PIVOTS          = int(_DIV_CFG.get("min_pivots", 2))
+MIN_TF_CONFLUENCE   = int(_DIV_CFG.get("min_tf_confluence", 2))     # ≥N TFs must agree for a multi-TF hit
 
 
 def _pivot_indices(values: np.ndarray, kind: str, order: int = PIVOT_ORDER) -> np.ndarray:

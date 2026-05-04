@@ -46,6 +46,8 @@ from typing import Optional
 
 import pandas as pd
 
+from modules.config_loader import CONFIG
+
 logger = logging.getLogger(__name__)
 
 # ─── Per-pattern lookback table ──────────────────────────────────────────────
@@ -120,11 +122,14 @@ PATTERN_INVALIDATION_LOOKBACK: dict[str, int] = {
     "elliott_abc_short": 25,
 }
 
+# Knobs — configurable via `invalidation` section in config.json.
+_INV_CFG              = CONFIG.get("invalidation", {})
+
 # Default for unknown / unmapped patterns.
-DEFAULT_LOOKBACK_BARS = 10
+DEFAULT_LOOKBACK_BARS = int(_INV_CFG.get("default_lookback_bars", 10))
 
 # Minimum bars required before we'll attempt to compute an invalidation level.
-MIN_BARS_REQUIRED = 5
+MIN_BARS_REQUIRED     = int(_INV_CFG.get("min_bars_required", 5))
 
 
 def get_invalidation_level(

@@ -531,8 +531,10 @@ def get_active_signals() -> set:
 
 # ─── Pattern stats (rolling 30-day winrate) ───────────────────────────────────
 
-PATTERN_STATS_MIN_SAMPLES = 10
-PATTERN_STATS_WINDOW_DAYS = 30
+# Knobs configurable via `pattern_stats` section in config.json.
+_PATTERN_STATS_CFG        = CONFIG.get("pattern_stats", {})
+PATTERN_STATS_MIN_SAMPLES = int(_PATTERN_STATS_CFG.get("min_samples_actual_override", 10))
+PATTERN_STATS_WINDOW_DAYS = int(_PATTERN_STATS_CFG.get("rolling_window_days", 30))
 
 
 def _isofmt_cutoff(days: int) -> str:

@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable, Mapping
 
+from modules.config_loader import CONFIG
 from modules.database import (
     PATTERN_STATS_MIN_SAMPLES,
     PATTERN_STATS_WINDOW_DAYS,
@@ -43,8 +44,10 @@ from modules.pattern_registry import baseline_for
 
 logger = logging.getLogger("SignalFormatter")
 
-CONFIDENCE_HIGH_THRESHOLD = 0.65
-CONFIDENCE_MED_THRESHOLD  = 0.50
+# Confidence thresholds — configurable via `pattern_stats` section in config.json.
+_PATTERN_STATS_CFG        = CONFIG.get("pattern_stats", {})
+CONFIDENCE_HIGH_THRESHOLD = float(_PATTERN_STATS_CFG.get("confidence_high", 0.65))
+CONFIDENCE_MED_THRESHOLD  = float(_PATTERN_STATS_CFG.get("confidence_med", 0.50))
 
 
 # ─── Confidence + display helpers ─────────────────────────────────────────────
