@@ -349,16 +349,15 @@ TP_STRUCTURE_TOL_BELOW_R  = float(STRATEGY_CFG.get("tp_structure_tol_below_r", 0
 TP_STRUCTURE_TOL_ABOVE_R  = float(STRATEGY_CFG.get("tp_structure_tol_above_r", 0.5))
 
 # ─── Regime-adaptive R:R ──────────────────────────────────────────────────────
-# Different regimes need different minimum R:R thresholds:
-#   TREND_BULL / TREND_BEAR — price has runway for extended targets; demand
-#       high R:R (≥3) to filter out weak trades that won't carry to TP3.
-#   RANGE / SQUEEZE — target = opposite range bound, naturally ~1.5-2R.
-#       Demanding 3R here rejects every clean range trade. Relax to 1.5.
+# Per-regime minimum R:R thresholds. Default flattened to 2.0 across all
+# regimes per user preference (single shared floor). Adaptive infrastructure
+# kept in place so per-regime tightening/loosening can be toggled later via
+# the config knobs without code changes.
 #   ANOMALY — already rejected upstream, never reaches this code.
 #   UNKNOWN — fall through to neutral default (risk_reward_min).
 REGIME_ADAPTIVE_RR_ENABLED = bool(STRATEGY_CFG.get("regime_adaptive_rr_enabled", True))
-MIN_RR_TREND               = float(STRATEGY_CFG.get("min_rr_trend", 3.0))
-MIN_RR_RANGE               = float(STRATEGY_CFG.get("min_rr_range", 1.5))
+MIN_RR_TREND               = float(STRATEGY_CFG.get("min_rr_trend", 2.0))
+MIN_RR_RANGE               = float(STRATEGY_CFG.get("min_rr_range", 2.0))
 
 
 # ─── FIX #07: Candle Confirm State — DB-backed ────────────────────────────────
@@ -1154,9 +1153,9 @@ def _step_build_trade_setup(
 def _resolve_min_rr(regime: dict | None) -> float:
     """Return the minimum R:R threshold for the given regime.
 
-    TREND_BULL / TREND_BEAR → MIN_RR_TREND (3.0)
-    RANGE / SQUEEZE         → MIN_RR_RANGE (1.5)
-    UNKNOWN / missing       → risk_reward_min (2.0, neutral default)
+    TREND_BULL / TREND_BEAR → MIN_RR_TREND (default 2.0)
+    RANGE / SQUEEZE         → MIN_RR_RANGE (default 2.0)
+    UNKNOWN / missing       → risk_reward_min (default 2.0, neutral default)
 
     Returns the legacy ``risk_reward_min`` value if the adaptive switch
     is disabled in config.
