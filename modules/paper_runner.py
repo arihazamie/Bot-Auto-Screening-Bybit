@@ -235,6 +235,10 @@ def _ingest_signals():
             "signal_id":          sig["id"],
             "symbol":             sym,
             "side":               side,
+            # Smart Entry C.2: propagate timeframe so volume confirmation
+            # uses the same TF as the signal (was previously dropped,
+            # forcing confirm_entry_with_volume to fall back to "15m").
+            "timeframe":          sig.get("timeframe"),
             "entry_price":        entry,
             "sl_price":           sl,
             "tp1": tp1, "tp2": tp2, "tp3": tp3,
