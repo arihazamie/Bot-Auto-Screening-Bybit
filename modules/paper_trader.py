@@ -32,7 +32,7 @@ Cascade TP (skip detection):
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from modules.config_loader import CONFIG
 from modules.database import (
     get_paper_balance,
@@ -43,6 +43,10 @@ from modules.database import (
     record_trade_close_outcomes,
 )
 from modules.notifier import send_reply
+from modules.smart_entry import (
+    VOLUME_CONFIRM_ENABLED as ENTRY_VOLUME_CONFIRM_ENABLED,
+    confirm_entry_with_volume,
+)
 
 logger = logging.getLogger("PaperTrader")
 
@@ -308,10 +312,18 @@ def _apply_partial_balance(pnl: float, label: str, symbol: str) -> float:
 
 # ─── PAPER EXECUTE (Entry Fill) ───────────────────────────────────────────────
 
-def paper_execute(trade: dict, current_price: float) -> bool:
+def paper_execute(trade: dict, current_price: float, *, client=None) -> bool:
     """
     Simulasi fill entry untuk PENDING paper trade.
     Returns True jika terisi, False jika masih menunggu.
+
+    When ``ENTRY_VOLUME_CONFIRM_ENABLED`` and a ``client`` is provided
+    (Smart Entry C.2), the fill is gated on the most recent CLOSED
+    bar passing both an RVOL ≥ ``min_rvol`` check and a
+    rejection-wick check. If the bar fails either gate the trade
+    stays PENDING and we re-evaluate on the next tick. The bar
+    timestamp is persisted to ``entry_confirmed_bar_ts`` so we don't
+    re-confirm the same bar across ticks.
     """
     side  = trade['side']
     entry = float(trade['entry_price'])
@@ -324,6 +336,39 @@ def paper_execute(trade: dict, current_price: float) -> bool:
     if not filled:
         return False
 
+    # ─── Smart Entry C.2: Volume confirmation gate ──────────────────────
+    # When client is unavailable (legacy callers / tests) we skip
+    # confirmation entirely and behave like before.
+    confirmed_at_ts: str | None = None
+    confirmed_bar_ts: int | None = None
+    if ENTRY_VOLUME_CONFIRM_ENABLED and client is not None:
+        last_evaluated_bar = trade.get("entry_confirmed_bar_ts")
+        timeframe          = trade.get("timeframe") or CONFIG.get("system", {}).get("entry_timeframe", "15m")
+        passed, bar_ts, reason = confirm_entry_with_volume(
+            client,
+            symbol=trade["symbol"],
+            side=side,
+            timeframe=timeframe,
+            entry_price=entry,
+            last_confirmed_bar_ts=int(last_evaluated_bar) if last_evaluated_bar else None,
+        )
+        if not passed:
+            # Persist bar_ts so we skip re-checking the same bar; only
+            # update if changed (avoids needless writes).
+            if bar_ts is not None and bar_ts != last_evaluated_bar:
+                update_active_trade(trade["id"], {"entry_confirmed_bar_ts": int(bar_ts)})
+            logger.debug(
+                f"[PAPER] {trade['symbol']} entry confirmation failed: {reason} "
+                f"(bar_ts={bar_ts})"
+            )
+            return False
+        confirmed_bar_ts = bar_ts
+        confirmed_at_ts  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(
+            f"📋 [PAPER] {trade['symbol']} entry confirmed: {reason} "
+            f"(bar_ts={bar_ts})"
+        )
+
     # Fix G — simulate realistic taker fill (slippage + half-spread).
     fill_price = _apply_entry_slippage(side, current_price)
     spread_bps = abs(fill_price - current_price) / max(current_price, 1e-9) * 10_000.0
@@ -334,7 +379,11 @@ def paper_execute(trade: dict, current_price: float) -> bool:
         )
         return False
 
-    update_active_trade(trade['id'], {"status": "OPEN", "entry_price": fill_price})
+    fill_updates: dict = {"status": "OPEN", "entry_price": fill_price}
+    if confirmed_at_ts is not None:
+        fill_updates["entry_confirmed_at"]     = confirmed_at_ts
+        fill_updates["entry_confirmed_bar_ts"] = int(confirmed_bar_ts) if confirmed_bar_ts else None
+    update_active_trade(trade['id'], fill_updates)
     logger.info(
         f"📋 [PAPER] Entry filled: {trade['symbol']} {side} @ {fill_price} "
         f"(touch {current_price}, slippage {spread_bps:.1f}bps)"

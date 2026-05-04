@@ -235,6 +235,19 @@ def init_db():
     _add_col_if_missing("signals",       "regime", "TEXT")
     _add_col_if_missing("active_trades", "regime", "TEXT")
 
+    # Smart Entry C.2: Volume confirmation at entry candle.
+    #   entry_confirmed_at      — UTC timestamp string when both RVOL +
+    #                             rejection-wick gates passed; NULL for
+    #                             trades filled before the feature
+    #                             existed or with confirmation disabled
+    #                             via config.
+    #   entry_confirmed_bar_ts  — millisecond timestamp of the closed
+    #                             bar that satisfied confirmation;
+    #                             persisted so we don't re-evaluate the
+    #                             same bar across runner ticks.
+    _add_col_if_missing("active_trades", "entry_confirmed_at",     "TEXT")
+    _add_col_if_missing("active_trades", "entry_confirmed_bar_ts", "INTEGER")
+
     # Seed paper_state (single row, never deleted)
     c.execute(
         "INSERT OR IGNORE INTO paper_state (id, balance, updated_at) VALUES (1, ?, ?)",
