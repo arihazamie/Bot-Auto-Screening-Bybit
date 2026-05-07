@@ -137,62 +137,119 @@ _START_TIME = time.time()
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX #4: BTC Bias — EMA 13/21 + ADX + price-position filter
+# FIX #4 (rev2): BTC Bias — Daily anchor + TREND_TF confirmation
 #
-# Masalah lama: hanya EMA13 > EMA21 → banyak false signal di sideways market.
-# Fix: tambahkan ADX ≥ threshold (default 20) dan pastikan close berada di sisi
-# yang benar dari kedua EMA, sehingga kondisi choppy → otomatis "Sideways".
-BTC_BIAS_ADX_MIN = float(CONFIG.get("strategy", {}).get("btc_bias_adx_min", 20.0))
+# Masalah lama (rev1): hanya pakai TREND_TF (1h) dengan ADX gate → saat BTC
+# pullback dalam uptrend, close turun di bawah EMA13 dan ADX melemah sehingga
+# bias terbaca "Sideways" padahal Daily trend masih jelas Bullish.
+#
+# Fix rev2: tambahkan Daily (1d) sebagai anchor utama.
+# Aturan:
+#   1. Hitung daily_bias dari EMA13/21 pada 1d (tanpa ADX gate — Daily cukup
+#      sendiri sebagai konfirmasi tren jangka menengah).
+#   2. Hitung intra_bias dari TREND_TF (1h) menggunakan EMA13/21 + ADX gate
+#      (tetap digunakan untuk deteksi momentum intraday).
+#   3. Gabungkan:
+#        • Jika daily_bias Bullish  dan intra_bias bukan Bearish  → "Bullish"
+#        • Jika daily_bias Bearish  dan intra_bias bukan Bullish  → "Bearish"
+#        • Jika daily_bias Bullish  dan intra_bias Bearish        → "Sideways"
+#        • Jika daily_bias Bearish  dan intra_bias Bullish        → "Sideways"
+#        • Jika daily_bias Sideways (EMA sangat berdekatan)       → gunakan intra_bias
+#
+# Dengan cara ini, pullback/konsolidasi jangka pendek di 1h TIDAK mengubah bias
+# menjadi "Sideways" selama Daily masih jelas Bullish/Bearish.
+BTC_BIAS_ADX_MIN    = float(CONFIG.get("strategy", {}).get("btc_bias_adx_min", 20.0))
+BTC_BIAS_DAILY_TF   = CONFIG.get("strategy", {}).get("btc_bias_daily_tf", "1d")
+
+
+def _calc_ema_bias(df: pd.DataFrame, label: str, use_adx: bool = False) -> str:
+    """
+    Helper: hitung bias EMA13/21 dari DataFrame OHLCV.
+    Jika use_adx=True, tambahkan ADX gate (hanya untuk TREND_TF).
+    Return: "Bullish" | "Bearish" | "Sideways"
+    """
+    df["ema13"] = ta.ema(df["close"], length=13)
+    df["ema21"] = ta.ema(df["close"], length=21)
+    curr = df.iloc[-1]
+
+    if pd.isna(curr["ema13"]) or pd.isna(curr["ema21"]):
+        logger.warning(f"_calc_ema_bias [{label}]: EMA NaN — fallback Sideways")
+        return "Sideways"
+
+    ema13 = float(curr["ema13"])
+    ema21 = float(curr["ema21"])
+    close = float(curr["close"])
+
+    if use_adx:
+        adx_df  = ta.adx(df["high"], df["low"], df["close"], length=14)
+        adx_col = [c for c in adx_df.columns if c.startswith("ADX_")]
+        adx_val = float(adx_df[adx_col[0]].iloc[-1]) if adx_col else 0.0
+        trend_strong = np.isfinite(adx_val) and adx_val >= BTC_BIAS_ADX_MIN
+        logger.info(
+            f"BTC Bias ({label}): EMA13={ema13:.2f} EMA21={ema21:.2f} "
+            f"Close={close:.2f} ADX={adx_val:.1f} (min={BTC_BIAS_ADX_MIN}, strong={trend_strong})"
+        )
+        if ema13 > ema21 and close > ema13 and trend_strong:
+            return "Bullish"
+        if ema13 < ema21 and close < ema21 and trend_strong:
+            return "Bearish"
+        return "Sideways"
+    else:
+        # Daily: tanpa ADX gate, cukup EMA cross + price position
+        if ema13 > ema21 and close > ema21:
+            return "Bullish"
+        if ema13 < ema21 and close < ema21:
+            return "Bearish"
+        return "Sideways"
 
 
 def get_btc_bias() -> str:
     """
-    BTC directional bias menggunakan EMA 13/21 + ADX(14) + price-position filter
-    pada TREND_TF.
+    BTC directional bias — Daily anchor + TREND_TF confirmation.
 
-    Rules:
-      Bullish  → EMA13 > EMA21  AND  close > EMA13  AND  ADX ≥ btc_bias_adx_min
-      Bearish  → EMA13 < EMA21  AND  close < EMA21  AND  ADX ≥ btc_bias_adx_min
-      Sideways → semua kondisi lain (ADX lemah, EMA crossed tapi price ambiguous)
+    Daily  (1d)      : EMA13/21 cross + price position (tanpa ADX gate)
+    Intraday (1h)    : EMA13/21 + ADX gate (btc_bias_adx_min)
 
-    Config: tambahkan "btc_bias_adx_min": 20 di bagian "strategy" untuk tuning.
+    Kombinasi:
+      daily Bullish  + intra != Bearish  → "Bullish"
+      daily Bearish  + intra != Bullish  → "Bearish"
+      daily Bullish  + intra Bearish     → "Sideways"  (konflik TF)
+      daily Bearish  + intra Bullish     → "Sideways"  (konflik TF)
+      daily Sideways                     → gunakan intra_bias langsung
+
+    Config opsional di config.json → "strategy":
+      "btc_bias_adx_min"  : ADX minimum untuk TREND_TF gate (default 20)
+      "btc_bias_daily_tf" : timeframe anchor (default "1d")
     """
     try:
-        df = client.fetch_ohlcv("BTC/USDT:USDT", TREND_TF, limit=100)
-        if df is None or len(df) < 30:
-            logger.warning("get_btc_bias: data BTC tidak cukup — fallback Sideways")
-            return "Sideways"
+        # ── 1. Daily anchor ──────────────────────────────────────────────────
+        df_daily = client.fetch_ohlcv("BTC/USDT:USDT", BTC_BIAS_DAILY_TF, limit=100)
+        if df_daily is None or len(df_daily) < 30:
+            logger.warning("get_btc_bias: data Daily BTC tidak cukup — fallback ke TREND_TF saja")
+            df_daily = None
 
-        df["ema13"] = ta.ema(df["close"], length=13)
-        df["ema21"] = ta.ema(df["close"], length=21)
+        daily_bias = _calc_ema_bias(df_daily, BTC_BIAS_DAILY_TF, use_adx=False) if df_daily is not None else "Sideways"
 
-        adx_df  = ta.adx(df["high"], df["low"], df["close"], length=14)
-        adx_col = [c for c in adx_df.columns if c.startswith("ADX_")]
-        df["adx14"] = adx_df[adx_col[0]] if adx_col else np.nan
-
-        curr = df.iloc[-1]
-
-        if pd.isna(curr["ema13"]) or pd.isna(curr["ema21"]) or pd.isna(curr["adx14"]):
-            logger.warning("get_btc_bias: EMA/ADX NaN — fallback Sideways")
-            return "Sideways"
-
-        ema13        = float(curr["ema13"])
-        ema21        = float(curr["ema21"])
-        close        = float(curr["close"])
-        adx          = float(curr["adx14"])
-        trend_strong = adx >= BTC_BIAS_ADX_MIN
-
-        if ema13 > ema21 and close > ema13 and trend_strong:
-            bias = "Bullish"
-        elif ema13 < ema21 and close < ema21 and trend_strong:
-            bias = "Bearish"
+        # ── 2. Intraday confirmation (TREND_TF = 1h) ─────────────────────────
+        df_intra = client.fetch_ohlcv("BTC/USDT:USDT", TREND_TF, limit=100)
+        if df_intra is None or len(df_intra) < 30:
+            logger.warning("get_btc_bias: data TREND_TF BTC tidak cukup — pakai Daily saja")
+            intra_bias = daily_bias
         else:
-            bias = "Sideways"
+            intra_bias = _calc_ema_bias(df_intra, TREND_TF, use_adx=True)
+
+        # ── 3. Kombinasi Daily + Intraday ─────────────────────────────────────
+        if daily_bias == "Bullish":
+            bias = "Sideways" if intra_bias == "Bearish" else "Bullish"
+        elif daily_bias == "Bearish":
+            bias = "Sideways" if intra_bias == "Bullish" else "Bearish"
+        else:
+            # Daily ambiguous → percayakan ke intraday
+            bias = intra_bias
 
         logger.info(
             f"BTC Bias ({TREND_TF}): {bias} | "
-            f"EMA13={ema13:.2f} EMA21={ema21:.2f} Close={close:.2f} "
-            f"ADX={adx:.1f} (min={BTC_BIAS_ADX_MIN}, strong={trend_strong})"
+            f"Daily={daily_bias} Intra={intra_bias}"
         )
         return bias
 

@@ -28,10 +28,10 @@
     "target_leverage": 10,
     "max_leverage_cap": 100,
     "risk_percent": 0.01,
-    "max_positions": 2,
+    "max_positions": 5,
     "max_daily_loss_pct": 0.008,
     "daily_profit_target_pct": 0.012,
-    "max_daily_trades": 2,
+    "max_daily_trades": 5,
     "pending_expire_hours": 3,
     "tp_split": [0.4, 0.3, 0.3],
     "atr_sl_multiplier": 1.5,
@@ -119,8 +119,8 @@
     "regime": {
       "trend_adx": 22,
       "anomaly_atr_pct": 0.025,
-      "squeeze_bbw_pct": 0.20,
-      "range_bbw_pct": 0.50,
+      "squeeze_bbw_pct": 0.2,
+      "range_bbw_pct": 0.5,
       "lookback": 120,
       "skip_when_anomaly": true
     },
@@ -164,7 +164,7 @@
     "min_samples_actual_override": 10,
     "rolling_window_days": 30,
     "confidence_high": 0.65,
-    "confidence_med": 0.50
+    "confidence_med": 0.5
   },
 
   "divergence": {
@@ -176,7 +176,7 @@
   "volume_profile": {
     "lookback": 100,
     "bins": 50,
-    "value_area_pct": 0.70,
+    "value_area_pct": 0.7,
     "tolerance_bin": 1
   },
 
