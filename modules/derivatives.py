@@ -2,7 +2,7 @@
 derivatives.py — Derivative Metrics: Funding Rate Gate, Basis, CVD Divergence
 
 ANOMALY HARDENING (fix C, D):
-  • Funding-rate thresholds re-scaled to match the actual Bybit format
+  • Funding-rate thresholds re-scaled to match the actual OKX format
     (fundingRate is sent as a fraction PER 8h period, e.g. 0.0001 = 0.01%).
     Previous defaults (0.02, 0.01, 0.005) effectively never triggered.
   • Added defensive auto-scaler that detects accidental percent-format input
@@ -34,7 +34,7 @@ logger = logging.getLogger("Derivatives")
 # ─── Config: threshold funding rate (dapat di-override di config.json) ────────
 _STRAT = CONFIG.get("strategy", {})
 
-# Default berskala 1e-4 (Bybit fundingRate is a fraction per 8h period).
+# Default berskala 1e-4 (OKX fundingRate is a fraction per 8h period).
 MAX_FUNDING_LONG  = float(_STRAT.get("max_funding_long",   0.0008))   # reject Long  if >  this
 MIN_FUNDING_SHORT = float(_STRAT.get("min_funding_short", -0.0008))   # reject Short if <  this
 COOL_FUNDING_ABS  = float(_STRAT.get("cool_funding_abs",   0.0002))   # |f| < this → "Cool Funding"
@@ -57,7 +57,7 @@ def _normalize_funding(raw) -> float:
     """
     Defensive scaler.
 
-    Bybit returns fundingRate as a fraction-per-period (e.g. 0.0001 == 0.01%).
+    OKX returns fundingRate as a fraction-per-period (e.g. 0.0001 == 0.01%).
     Some integrations accidentally pass percent-format values (e.g. 0.05 meaning
     5%) which would silently break the gate.  If |raw| > 0.05 we assume it is a
     percent number and rescale by 1/100.  Real funding rarely exceeds ±0.5%/8h

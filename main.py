@@ -23,7 +23,7 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from modules.config_loader import CONFIG
-from modules.exchange import BybitClient
+from modules.exchange import OKXClient
 from modules.database import (
     init_db,
     get_active_signals,
@@ -93,7 +93,7 @@ MAX_DAILY_LOSS       = RISK_CFG.get("max_daily_loss_pct", 0.01)
 MAX_DAILY_TRADES     = RISK_CFG.get("max_daily_trades", 3)
 
 print("=" * 60)
-print("🤖 Bybit Screening Bot v8")
+print("🤖 OKX Screening Bot v8")
 print("=" * 60)
 print(f"   Mode    : SIGNAL ONLY 📡 (screening + paper portfolio tracker)")
 print(f"   Debug   : {'ON 🔍' if DEBUG_MODE else 'OFF (set \"debug\": true di config.json untuk verbose)'}")
@@ -126,7 +126,7 @@ SCAN_SUMMARY_SHOW_REGIME = bool(_SCAN_SUMMARY_CFG.get("show_regime_distribution"
 # ─────────────────────────────────────────────────────────────────────────────
 # Exchange client (singleton)
 # ─────────────────────────────────────────────────────────────────────────────
-client = BybitClient(debug=DEBUG_MODE)
+client = OKXClient(debug=DEBUG_MODE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX: Bot startup timestamp — dipakai oleh heartbeat untuk hitung uptime
@@ -1628,7 +1628,7 @@ def scan():
             info = get_watchlist_info()
             logger.info(f"📋 Watchlist: {len(syms)} pairs (updated: {info.get('updated_at', '?')[:16]})")
         else:
-            logger.warning("⚠️  Watchlist belum ada — fallback fetch semua pair dari Bybit...")
+            logger.warning("⚠️  Watchlist belum ada — fallback fetch semua pair dari OKX...")
             markets = client.load_markets()
             STABLECOINS = {"USDC","USDT","DAI","FDUSD","USDD","USDE","TUSD","BUSD","PYUSD","USDS","EUR","USD"}
             syms = [
@@ -1813,12 +1813,12 @@ if __name__ == "__main__":
     print()
     start_command_listener()
 
-    # ── Cek koneksi Bybit (public market data only) ─────────────
+    # ── Cek koneksi OKX (public market data only) ──────────────
     ok = client.health_check()
     if not ok:
         print("\n❌ Health check gagal — pastikan:")
         print("   1. Koneksi internet aktif")
-        print("   2. Bybit API tidak diblokir (coba VPN jika perlu)")
+        print("   2. OKX API tidak diblokir (coba VPN jika perlu)")
         print("   Bot tetap berjalan, tapi sinyal mungkin tidak keluar.\n")
 
     # ── Refresh watchlist saat startup ──────────────────────────

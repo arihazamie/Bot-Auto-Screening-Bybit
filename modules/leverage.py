@@ -5,7 +5,7 @@ Centralises per-symbol leverage resolution for the paper portfolio tracker.
 In the original codebase this also synced real-mode trading; the bot is now
 signal-only, so this helper is paper-only — retained for consistent sizing:
 
-    use_max_leverage  → Bybit per-symbol max (BTC=100x, SOL=50x, …) clipped by
+    use_max_leverage  → OKX per-symbol max (BTC=100x, SOL=50x, …) clipped by
                         max_leverage_cap.
     not use_max_leverage → fixed target_leverage clipped by max_leverage_cap.
 
@@ -18,7 +18,7 @@ import logging
 import threading
 
 from modules.config_loader import CONFIG
-from modules.exchange import BybitClient
+from modules.exchange import OKXClient
 
 logger = logging.getLogger("Leverage")
 
@@ -27,27 +27,27 @@ USE_MAX_LEVERAGE   = bool(_RISK.get("use_max_leverage",   True))
 TARGET_LEVERAGE    = int(_RISK.get("target_leverage",     10))
 MAX_LEVERAGE_CAP   = int(_RISK.get("max_leverage_cap",   100))
 
-_client: BybitClient | None = None
+_client: OKXClient | None = None
 _lock   = threading.Lock()
 
 
-def _get_client() -> BybitClient:
+def _get_client() -> OKXClient:
     global _client
     if _client is None:
         with _lock:
             if _client is None:
-                _client = BybitClient(debug=False, auto_trade=False)
+                _client = OKXClient(debug=False, auto_trade=False)
     return _client
 
 
-def resolve_leverage(symbol: str, client: BybitClient | None = None) -> int:
+def resolve_leverage(symbol: str, client: OKXClient | None = None) -> int:
     """
     Return the leverage to use for `symbol` in paper sizing. The optional
     `client` argument is retained for backward-compat — paper mode lazily
     spins one up via `_get_client()`.
 
     Behaviour:
-      * `use_max_leverage=true`  → Bybit per-symbol max (clamped by
+      * `use_max_leverage=true`  → OKX per-symbol max (clamped by
         `max_leverage_cap`).
       * `use_max_leverage=false` → `target_leverage` (clamped).
       * Any path falls back to `target_leverage` on RPC error.
@@ -67,7 +67,7 @@ def resolve_leverage(symbol: str, client: BybitClient | None = None) -> int:
     capped = min(max_lev, cap)
     if capped < max_lev:
         logger.debug(
-            f"[{symbol}] leverage Bybit={max_lev}x → di-cap menjadi {capped}x "
+            f"[{symbol}] leverage OKX={max_lev}x → di-cap menjadi {capped}x "
             f"(max_leverage_cap={cap}x)"
         )
     return max(1, capped)

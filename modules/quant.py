@@ -3,7 +3,7 @@ quant.py — Quantitative Signal Metrics
 ========================================
 Changes vs v1:
   - calculate_obi() now uses REAL order book depth (top 10 bid/ask levels)
-    instead of ticker bidVolume/askVolume which is almost always 0 on Bybit.
+    instead of ticker bidVolume/askVolume which is almost always 0 on OKX.
   - calculate_metrics() accepts an optional order_book dict (pass {} to skip OBI).
 
 Fixes applied:

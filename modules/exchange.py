@@ -1,5 +1,5 @@
 """
-exchange.py — Best-practice CCXT/Bybit wrapper
+exchange.py — Best-practice CCXT/OKX wrapper
 
 Fitur:
   ✅ Auto-detect format symbol (BTC/USDT → BTC/USDT:USDT untuk swap)
@@ -10,8 +10,8 @@ Fitur:
   ✅ Satu titik error handling untuk seluruh bot
 
 Cara pakai di main.py:
-    from modules.exchange import BybitClient
-    client = BybitClient(debug=False)   # debug=True untuk verbose
+    from modules.exchange import OKXClient
+    client = OKXClient(debug=False)    # debug=True untuk verbose
     client.health_check()              # cek koneksi saat startup
     df    = client.fetch_ohlcv('BTC/USDT:USDT', '1h', limit=100)
     ticker = client.fetch_ticker('ETH/USDT:USDT')
@@ -84,7 +84,7 @@ def _with_retry(max_retries: int = 3, base_delay: float = 1.0):
                     raise
 
                 except ccxt.ExchangeError as e:
-                    # Error dari Bybit (contoh: invalid parameter)
+                    # Error dari OKX (contoh: invalid parameter)
                     logger.error(f"❌ ExchangeError [{fn.__name__}]: {e}")
                     raise
 
@@ -107,11 +107,11 @@ def _with_retry(max_retries: int = 3, base_delay: float = 1.0):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BybitClient
+# OKXClient
 # ─────────────────────────────────────────────────────────────────────────────
-class BybitClient:
+class OKXClient:
     """
-    Wrapper tunggal untuk semua interaksi dengan Bybit via CCXT.
+    Wrapper tunggal untuk semua interaksi dengan OKX via CCXT.
 
     Parameter
     ---------
@@ -129,19 +129,16 @@ class BybitClient:
         # Signal-only: no API key. CCXT will only hit public market-data endpoints.
         api_cfg: dict = {}
 
-        self._ex = ccxt.bybit({
+        self._ex = ccxt.okx({
             **api_cfg,
             "options": {
-                "defaultType": "swap",            # Perpetual futures
-                "adjustForTimeDifference": True,   # Auto-sync clock dengan Bybit server
-                "recvWindow": 20_000,              # Toleransi clock meleset hingga 20 detik
-                "unifiedAccount": True,            # Bypass auto-detect unified account
+                "defaultType": "swap",   # Perpetual futures
             },
-            "enableRateLimit": True,              # CCXT built-in rate limiter
-            "timeout": 15_000,                    # 15 detik timeout per request
+            "enableRateLimit": True,     # CCXT built-in rate limiter
+            "timeout": 15_000,           # 15 detik timeout per request
         })
 
-        logger.info("BybitClient initialized (mode=swap, rateLimit=ON)")
+        logger.info("OKXClient initialized (mode=swap, rateLimit=ON)")
 
         # Symbol normalization cache — instance variable (bukan class variable)
         # agar tidak bocor antar instance (terutama saat testing atau multi-client)
@@ -155,17 +152,14 @@ class BybitClient:
 
         # Cache max leverage per symbol (thread-safe + TTL)
         # Struktur: { symbol: (max_leverage: int, fetched_at: float) }
-        # TTL default 6 jam — Bybit sesekali mengubah max leverage per coin
+        # TTL default 6 jam — OKX sesekali mengubah max leverage per coin
         self._leverage_cache: dict[str, tuple[int, float]] = {}
         self._leverage_lock  = threading.Lock()
         self._leverage_ttl   = 6 * 3600   # 6 jam dalam detik
 
         # Cache OHLCV per (symbol, timeframe) — mengurangi API call saat scan.
         # Validasi BOUNDARY-AWARE (lihat _is_cache_fresh): cache valid selama
-        # fetched_at dan now masih di periode candle yang sama. Begitu candle
-        # TF berikutnya close, cache otomatis invalidate sehingga scan tepat
-        # di boundary (mis. 11:00:05 untuk 1h) selalu re-fetch dan dapat
-        # candle yang baru close.
+        # fetched_at dan now masih di periode candle yang sama.
         # Struktur: { (symbol, timeframe): (DataFrame, fetched_at: float) }
         self._ohlcv_cache: dict[tuple, tuple] = {}
         self._ohlcv_lock  = threading.Lock()
@@ -175,7 +169,7 @@ class BybitClient:
     # ─────────────────────────────────────────────
     def normalize_symbol(self, symbol: str) -> str:
         """
-        Konversi symbol ke format Bybit Perpetual yang benar.
+        Konversi symbol ke format OKX Perpetual yang benar.
 
         Contoh:
           'BTC/USDT'      → 'BTC/USDT:USDT'
@@ -216,13 +210,13 @@ class BybitClient:
     # ─────────────────────────────────────────────
     def health_check(self, auto_trade: bool = False) -> bool:
         """
-        Verifikasi koneksi ke Bybit (public market-data only).
+        Verifikasi koneksi ke OKX (public market-data only).
         Print ringkasan status ke stdout. Return True jika OK.
 
         `auto_trade` retained for backward-compat — ignored in signal-only mode.
         """
         print("\n" + "─" * 50)
-        print("🔌 Bybit Connection Health Check")
+        print("🔌 OKX Connection Health Check")
         print("─" * 50)
 
         ok = True
@@ -267,12 +261,8 @@ class BybitClient:
     }
 
     # Offset (detik) untuk menggeser epoch sebelum di-floor ke periode candle.
-    # Diperlukan saat boundary candle exchange tidak sejajar dengan kelipatan
-    # epoch Unix (1970-01-01 00:00 UTC = Kamis).
-    #   • 1w: Bybit close weekly candle hari SENIN 00:00 UTC. Epoch jatuh di
-    #     Kamis → boundary naive jatuh di Kamis. Geser +4 hari (4×86400 =
-    #     345600s) supaya boundary jatuh di Senin.
-    # TF lain (1m–1d) sudah otomatis sejajar dengan epoch UTC.
+    # OKX close weekly candle hari SENIN 00:00 UTC — sama seperti mayoritas exchange.
+    # Epoch 0 = Kamis → geser +4 hari (345600s) supaya boundary jatuh di Senin.
     _TF_OFFSET: dict[str, int] = {
         "1w": 345600,   # 4 hari = Kamis → Senin
     }
@@ -280,21 +270,6 @@ class BybitClient:
     def _is_cache_fresh(self, timeframe: str, fetched_at: float, now: float) -> bool:
         """
         Cache fresh ⇔ fetched_at dan now masih di periode candle yang sama.
-
-        Konkret: kalau fetch dilakukan jam 10:17 untuk TF 1h, candle period
-        index = 10:17 // 3600 = epoch 10:00. Selama scan berikutnya juga
-        masih < 11:00 (epoch yang sama), cache masih relevan karena tidak
-        ada candle 1h yang baru close. Begitu now ≥ 11:00:00, period index
-        bertambah → cache invalid → fetch ulang untuk dapat candle baru.
-
-        Hasil: scan tepat di boundary (11:00:05) selalu re-fetch, tidak
-        lagi terjebak TTL stale 45 menit lama.
-
-        Untuk TF dengan boundary tidak sejajar Unix epoch (mis. 1w yang
-        close Senin 00:00 UTC, sedangkan epoch = Kamis), terapkan offset
-        dari _TF_OFFSET supaya `int((t - offset) // candle_sec)` benar-
-        benar mencerminkan periode candle exchange.
-
         Unknown timeframe → fallback ke 15m supaya tidak cache forever.
         """
         candle_sec = self._TF_SECONDS.get(timeframe, 900)
@@ -316,9 +291,7 @@ class BybitClient:
     ) -> Optional[pd.DataFrame]:
         """
         Fetch OHLCV dan return sebagai DataFrame.
-        Hasil di-cache per (symbol, timeframe) dengan validasi boundary-aware:
-        cache invalidate begitu candle TF berikutnya close, sehingga scan tepat
-        di boundary candle (mis. 11:00:05 untuk 1h) selalu dapat data fresh.
+        Hasil di-cache per (symbol, timeframe) dengan validasi boundary-aware.
 
         Return None jika data tidak cukup (bukan exception).
         Kolom: timestamp (datetime), open, high, low, close, volume
@@ -328,8 +301,6 @@ class BybitClient:
         now       = time.time()
 
         # ── Cache read (fast path) — boundary-aware ─────────────────────────
-        # Cache valid hanya selama belum ada candle TF baru yang close.
-        # Begitu boundary candle terlewati → invalidate, fetch ulang.
         cached = self._ohlcv_cache.get(cache_key)
         if cached is not None:
             df_cached, fetched_at = cached
@@ -340,7 +311,7 @@ class BybitClient:
                 )
                 return df_cached.copy()
 
-        # ── Cache miss: fetch dari Bybit ───────────────────────────────────
+        # ── Cache miss: fetch dari OKX ─────────────────────────────────────
         t0   = time.time()
         bars = self._ex.fetch_ohlcv(sym, timeframe, limit=limit)
         self._dbg("fetch_ohlcv", sym, t0, len(bars) if bars else 0)
@@ -402,27 +373,20 @@ class BybitClient:
     # ─────────────────────────────────────────────
     def fetch_max_leverage(self, symbol: str, fallback: int = 10) -> int:
         """
-        Ambil max leverage dari Bybit untuk satu symbol perpetual.
+        Ambil max leverage dari OKX untuk satu symbol perpetual.
 
         Prioritas pembacaan (dari paling akurat):
-          1. info.leverageFilter.maxLeverage  — field Bybit asli, paling reliable
-          2. limits.leverage.max              — field standar ccxt, kadang kosong/0
-          3. fallback                         — dari config atau parameter
+          1. info.maxLever      — field OKX asli, paling reliable
+          2. limits.leverage.max — field standar ccxt, kadang kosong/0
+          3. fallback            — dari config atau parameter
 
         Thread-safe: hasil di-cache per symbol agar tidak request berulang.
-        TTL 6 jam: cache di-invalidate otomatis karena Bybit bisa mengubah max
-        leverage per coin (terutama coin baru atau saat market crash).
+        TTL 6 jam: cache di-invalidate otomatis karena OKX bisa mengubah max
+        leverage per coin.
 
-        Error handling:
-          - Jika load_markets() gagal karena error SEMENTARA (NetworkError, timeout),
-            kembalikan fallback TANPA menyimpan ke cache, sehingga request berikutnya
-            tetap mencoba fetch ulang.
-          - Jika symbol memang tidak ada di Bybit, baru cache fallback-nya.
-
-        Contoh hasil nyata dari Bybit:
-          BTC/USDT:USDT  → 100x
+        Contoh hasil nyata dari OKX:
+          BTC/USDT:USDT  → 125x
           ETH/USDT:USDT  → 100x
-          GALA/USDT:USDT → 25x
           DOGE/USDT:USDT → 50x
           XRP/USDT:USDT  → 75x
 
@@ -433,19 +397,16 @@ class BybitClient:
 
         Return
         ------
-        int — max leverage yang diizinkan Bybit untuk symbol tersebut
+        int — max leverage yang diizinkan OKX untuk symbol tersebut
         """
         sym = self.normalize_symbol(symbol)
 
         # ── Fast path: cache hit yang belum expired ───────────────────────────
-        # Baca tuple (value, timestamp) dari cache; tidak perlu lock untuk read
-        # karena dict lookup atomic di CPython dan kita hanya baca
         cached = self._leverage_cache.get(sym)
         if cached is not None:
             cached_value, fetched_at = cached
             if (time.time() - fetched_at) < self._leverage_ttl:
                 return cached_value
-            # TTL expired → hapus dari cache, lanjut fetch ulang
             logger.debug(f"[{sym}] leverage cache expired (TTL {self._leverage_ttl/3600:.0f}h) — refresh")
 
         with self._leverage_lock:
@@ -459,7 +420,6 @@ class BybitClient:
             max_lev = fallback
             symbol_found = False
             try:
-                # ccxt cache markets secara internal — load_markets() aman dipanggil berulang
                 markets = self._ex.load_markets()
                 market  = markets.get(sym, {})
 
@@ -468,26 +428,21 @@ class BybitClient:
                         f"fetch_max_leverage [{sym}] — symbol tidak ditemukan di markets, "
                         f"fallback={fallback}x"
                     )
-                    # Symbol tidak ada → cache fallback (bukan error sementara)
                     self._leverage_cache[sym] = (fallback, time.time())
                     return fallback
 
                 symbol_found = True
 
-                # ── Prioritas 1: Bybit native field ──────────────────────────
-                bybit_lev = (
-                    market.get("info", {})
-                          .get("leverageFilter", {})
-                          .get("maxLeverage")
-                )
-                if bybit_lev:
+                # ── Prioritas 1: OKX native field ────────────────────────────
+                okx_lev = market.get("info", {}).get("maxLever")
+                if okx_lev:
                     try:
-                        parsed = int(float(bybit_lev))
+                        parsed = int(float(okx_lev))
                         if parsed > 0:
                             max_lev = parsed
                             logger.debug(
                                 f"[{sym}] max_leverage={max_lev}x "
-                                f"(sumber: leverageFilter.maxLeverage)"
+                                f"(sumber: info.maxLever)"
                             )
                     except (ValueError, TypeError):
                         pass
@@ -515,7 +470,6 @@ class BybitClient:
                     max_lev = fallback
 
             except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
-                # Error SEMENTARA: jaringan/timeout → jangan cache, coba lagi nanti
                 logger.warning(
                     f"fetch_max_leverage [{sym}] network error — fallback={fallback}x "
                     f"(tidak di-cache, akan retry) | {e}"
@@ -526,14 +480,12 @@ class BybitClient:
                 logger.warning(
                     f"fetch_max_leverage [{sym}] error — fallback={fallback}x | {e}"
                 )
-                # Error tak terduga: cache fallback dengan TTL pendek (1 jam)
-                # agar tidak terus-terusan retry tapi juga tidak stuck selamanya
                 self._leverage_cache[sym] = (fallback, time.time() - self._leverage_ttl + 3600)
                 return fallback
 
             # Simpan ke cache dengan timestamp saat ini
             self._leverage_cache[sym] = (max_lev, time.time())
-            src = "Bybit data" if symbol_found else "fallback"
+            src = "OKX data" if symbol_found else "fallback"
             logger.info(f"📊 [{sym}] Max leverage: {max_lev}x (cached, TTL {self._leverage_ttl/3600:.0f}h, src={src})")
             return max_lev
 
@@ -542,16 +494,7 @@ class BybitClient:
         Warm-up cache leverage untuk banyak symbol sekaligus.
 
         Memanggil load_markets() SEKALI (ccxt sudah cache internal), lalu
-        parsing tiap symbol tanpa request tambahan. Ideal dipanggil saat
-        startup setelah watchlist dimuat — sebelum scan pertama — sehingga
-        scan tidak terhambat fetch leverage satu per satu.
-
-        Contoh di main.py (setelah refresh_watchlist):
-            client.prefetch_leverage(get_watchlist())
-
-        Parameter
-        ---------
-        symbols : list[str] — list symbol format apapun
+        parsing tiap symbol tanpa request tambahan.
         """
         if not symbols:
             return
@@ -579,14 +522,11 @@ class BybitClient:
                 continue
 
             max_lev: int = 10  # default
-            bybit_lev = (
-                market.get("info", {})
-                      .get("leverageFilter", {})
-                      .get("maxLeverage")
-            )
-            if bybit_lev:
+            # OKX native field
+            okx_lev = market.get("info", {}).get("maxLever")
+            if okx_lev:
                 try:
-                    parsed = int(float(bybit_lev))
+                    parsed = int(float(okx_lev))
                     if parsed > 0:
                         max_lev = parsed
                 except (ValueError, TypeError):
@@ -621,7 +561,7 @@ class BybitClient:
     @_with_retry(max_retries=3, base_delay=2.0)
     def load_markets(self) -> dict:
         """
-        Load semua market info dari Bybit.
+        Load semua market info dari OKX.
         Di-cache oleh CCXT secara internal.
         """
         t0 = time.time()
@@ -644,9 +584,13 @@ class BybitClient:
     # Expose raw exchange untuk fitur lain (jika perlu)
     # ─────────────────────────────────────────────
     @property
-    def raw(self) -> ccxt.bybit:
+    def raw(self) -> ccxt.okx:
         """
-        Akses langsung ke objek ccxt.bybit jika butuh method yang belum di-wrap.
+        Akses langsung ke objek ccxt.okx jika butuh method yang belum di-wrap.
         Gunakan dengan hati-hati — tidak ada retry/logging otomatis.
         """
         return self._ex
+
+
+# Backward-compat alias — allows older callers that import BybitClient to work
+BybitClient = OKXClient

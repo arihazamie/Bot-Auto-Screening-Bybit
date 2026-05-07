@@ -1,7 +1,7 @@
 """
-watchlist.py — Top N USDT Perpetual pairs by 24h volume dari Bybit.
+watchlist.py — Top N USDT Perpetual pairs by 24h volume dari OKX.
 
-Default TOP_N=300: covers virtually every liquid USDT perpetual on Bybit.
+Default TOP_N=300: covers virtually every liquid USDT perpetual on OKX.
 Override via system.watchlist_top_n in config.json (e.g. 100 for a tighter list).
 
 Direfresh setiap hari jam 7 pagi via schedule di main.py.
@@ -44,7 +44,7 @@ STABLECOINS = {
 
 def refresh_watchlist(exchange, top_n: int = TOP_N) -> list[str]:
     """
-    Fetch semua USDT perpetual ticker dari Bybit,
+    Fetch semua USDT perpetual ticker dari OKX,
     sort by quoteVolume (24h), ambil top N.
     Simpan hasilnya ke data/watchlist.json.
 

@@ -95,8 +95,8 @@ def load_config() -> dict:
         val = getter(config)
         if val is None or val == "" or val in ("YOUR_TELEGRAM_BOT_TOKEN",
                                                 "YOUR_TELEGRAM_CHAT_ID",
-                                                "YOUR_BYBIT_API_KEY",
-                                                "YOUR_BYBIT_API_SECRET"):
+                                                "YOUR_OKX_API_KEY",
+                                                "YOUR_OKX_API_SECRET"):
             missing.append(f"  - {label}")
 
     if missing:

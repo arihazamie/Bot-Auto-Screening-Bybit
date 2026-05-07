@@ -365,7 +365,7 @@ def confirm_entry_with_volume(
     bar across ticks.
 
     Args:
-        client                 — BybitClient (or stub with .fetch_ohlcv)
+        client                 — OKXClient (or stub with .fetch_ohlcv)
         symbol                 — pair identifier
         side                   — "Long" | "Short"
         timeframe              — e.g. "15m"
@@ -398,7 +398,7 @@ def confirm_entry_with_volume(
     if df is None or len(df) < VOLUME_RVOL_LOOKBACK + 2:
         return False, None, "insufficient-bars"
 
-    # Bybit OHLCV returns the in-progress bar as the LAST row. We need
+    # OKX OHLCV returns the in-progress bar as the LAST row. We need
     # the most recent CLOSED bar — that's df.iloc[-2] (the prior bar).
     closed_idx = -2
     bar = df.iloc[closed_idx]

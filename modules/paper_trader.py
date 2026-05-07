@@ -1,6 +1,6 @@
 """
 Paper Trader — simulates order fills, TP hits, SL hits, and PnL
-without placing any real orders on Bybit.
+without placing any real orders on OKX.
 
 PnL Formula (BENAR — seperti exchange asli):
     margin         = balance * risk%               ← uang yang dipertaruhkan
@@ -80,7 +80,7 @@ CHANDELIER_TRAIL_ENABLED   = bool(_PAPER_STRATEGY.get("chandelier_trail_enabled"
 CHANDELIER_TRAIL_R_MULT    = float(_PAPER_STRATEGY.get("chandelier_trail_r_mult", 1.33))
 
 # ─── ANOMALY HARDENING (fix G + H) ────────────────────────────────────────────
-# Real Bybit fills are not at the exact mark price. Simulate a configurable
+# Real OKX fills are not at the exact mark price. Simulate a configurable
 # slippage + spread cost so paper PnL is not optimistic vs production.
 # Defaults: 5 bps slippage, 2 bps spread, reject fill if spread > 50 bps.
 _PAPER_RISK            = CONFIG.get("risk", {})
@@ -198,7 +198,7 @@ def _calc_pnl(side: str, entry: float, exit_price: float, qty: float) -> float:
     else:
         raw_pnl = (entry - exit_price) * qty
 
-    # Bybit taker fee 0.055% open + 0.055% close
+    # OKX taker fee 0.05% open + 0.05% close
     fee = (entry * qty * 0.00055) + (exit_price * qty * 0.00055)
     return round(raw_pnl - fee, 4)
 

@@ -21,7 +21,7 @@ except ImportError:                           # pragma: no cover
     from backports.zoneinfo import ZoneInfo  # type: ignore
 
 from modules.config_loader import CONFIG
-from modules.exchange import BybitClient
+from modules.exchange import OKXClient
 from modules.database import (
     init_db,
     insert_active_trade,
@@ -82,18 +82,18 @@ except Exception:
 MAX_LOSS_PER_TRADE_PCT = float(RISK.get("max_loss_per_trade_pct", 0.01))  # default 1%
 
 # ─── Exchange (public-only — untuk harga & market info) ───────────────────
-_client: BybitClient | None = None
+_client: OKXClient | None = None
 _client_lock = threading.Lock()
 
 
-def _get_client() -> BybitClient:
-    """Lazy-init BybitClient singleton (public only, tidak butuh API key)."""
+def _get_client() -> OKXClient:
+    """Lazy-init OKXClient singleton (public only, tidak butuh API key)."""
     global _client
     if _client is None:
         with _client_lock:
             if _client is None:
-                _client = BybitClient(debug=False, auto_trade=False)
-                logger.info("📡 PaperRunner — BybitClient ready")
+                _client = OKXClient(debug=False, auto_trade=False)
+                logger.info("📡 PaperRunner — OKXClient ready")
     return _client
 
 
@@ -194,7 +194,7 @@ def _ingest_signals():
         # ✅ Ambil telegram_msg_id dari sinyal agar bisa reply ke pesan asli
         tg_msg_id = sig.get("telegram_msg_id")
 
-        # Leverage: per-coin max dari Bybit, atau fixed dari config
+        # Leverage: per-coin max dari OKX, atau fixed dari config
         final_lev = _get_leverage_for(sym)
 
         position_value = equity * RISK_PERCENT * final_lev
@@ -511,7 +511,7 @@ def _run_loop():
     logger.info(f"   Risk/trade    : {RISK_PERCENT * 100:.1f}%")
     logger.info(f"   Max positions : {MAX_POSITIONS}")
     if USE_MAX_LEVERAGE:
-        logger.info("   Leverage      : MAX per coin (dari Bybit) 🔝")
+        logger.info("   Leverage      : MAX per coin (dari OKX) 🔝")
     else:
         logger.info(f"   Leverage      : Fixed {TARGET_LEV}x semua coin")
 
